@@ -1,1 +1,1 @@
-# SPICESS
+![alt text](model.png)
