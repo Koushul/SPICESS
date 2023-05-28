@@ -1,8 +1,8 @@
-import torch.nn.functional as F
-import torch.nn as  nn
-import torch
-from torch import FloatTensor, LongTensor
 import numpy as np
+import torch
+import torch.nn.functional as F
+import torch.nn as nn
+from torch import FloatTensor, LongTensor
 
 class GraphConvolution(nn.Module):
     """Basic graph convolution layer for undirected graph without edge labels."""
@@ -12,7 +12,7 @@ class GraphConvolution(nn.Module):
         self.output_dim = output_dim
         self.dropout = dropout
         self.act = act
-        self.weight=nn.parameter.Parameter(torch.FloatTensor(input_dim, output_dim))
+        self.weight = nn.parameter.Parameter(torch.FloatTensor(input_dim, output_dim))
         if bias:
             self.bias = nn.parameter.Parameter(torch.FloatTensor(output_dim))
         else:
@@ -34,7 +34,7 @@ class GraphConvolution(nn.Module):
         support = torch.mm(input, self.weight)
         output = torch.sparse.mm(adj, support)
         if self.bias is not None:
-            output= output + self.bias
+            output = output + self.bias
         output = self.act(output)
         return output
 

@@ -1,5 +1,7 @@
+from matplotlib import pyplot as plt
 import torch
 import torch.nn.functional as F
+
 
 class LossFunctions:
     
@@ -13,16 +15,25 @@ class LossFunctions:
         self.zinb = []
         self.loss = []
         
-        
+      
     def plot(self):
-        ...
+        fig, axs = plt.subplots(1, 4, figsize=(20, 5))
+        axs[0].plot(self.penalties)
+        axs[0].set_title('Penalties')
+        axs[1].plot(self.kl)
+        axs[1].set_title('KL')
+        axs[2].plot(self.ce)
+        axs[2].set_title('CE')
+        axs[3].plot(self.zinb)
+        axs[3].set_title('ZINB')
+        plt.show()
         
         
-    def compute(self, varz, reg=False):        
-        loss_kl_train = self.KL(varz.mu, varz.logvar, varz.train_nodes_idx)
-        loss_x_train = self.ZINB(varz.features_recon, varz.feature, varz.train_nodes_idx)
-        loss_a_train = self.CE(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm, varz.train_nodes_idx)
-        loss = loss_kl_train + loss_x_train + loss_a_train
+    def compute(self, varz, reg:bool=True):        
+        loss_kl = self.KL(varz.mu, varz.logvar, varz.train_nodes_idx) ## latent dist vs prior
+        loss_x = self.ZINB(varz.features_recon, varz.feature, varz.train_nodes_idx) ## gene reconstruction 
+        loss_a = self.CE(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm, varz.train_nodes_idx) ## adj reconstruction
+        loss = loss_kl + loss_x + loss_a
 
         if reg: 
             p = self.penalty(varz.z, varz.sp_dists)
@@ -61,16 +72,19 @@ class LossFunctions:
     
     def CE(self, preds, labels, pos_weight, norm, nodemask=None):
         if nodemask is None:
-            cost = norm * F.binary_cross_entropy_with_logits(preds, 
-                                                             labels, 
-                                                             pos_weight=pos_weight,
-                                                             reduction='mean')
+            cost = norm * F.binary_cross_entropy_with_logits(
+                preds, 
+                labels, 
+                pos_weight=pos_weight,
+                reduction='mean')
             return cost
         
-        cost = norm * F.binary_cross_entropy_with_logits(preds[nodemask,:][:,nodemask], 
-                                                         labels[nodemask,:][:,nodemask], 
-                                                         pos_weight=pos_weight,
-                                                         reduction='mean')
+        cost = norm * F.binary_cross_entropy_with_logits(
+            preds[nodemask,:][:,nodemask], 
+            labels[nodemask,:][:,nodemask], 
+            pos_weight=pos_weight,
+            reduction='mean')
+        
         self.ce.append(float(cost))
         return cost
 

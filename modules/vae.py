@@ -9,7 +9,7 @@ from modules.inner_product import InnerProductDecoder
 from modules.linear import LinearBlock
 
 class GraphVAE(nn.Module):   
-    def __init__(self, input_feat_dim, hidden_dim1, hidden_dim2, hidden_decoder, dropout) -> None:
+    def __init__(self, input_feat_dim, hidden_dim1, latent_dim, hidden_decoder, dropout) -> None:
         super(GraphVAE, self).__init__()
         
         meanMin = 1e-5
@@ -25,13 +25,13 @@ class GraphVAE(nn.Module):
         
         self.gc_mu = GraphConvolution(
             input_dim=hidden_dim1, 
-            output_dim=hidden_dim2, 
+            output_dim=latent_dim, 
             dropout=dropout, 
             act=F.leaky_relu) 
         
         self.gc_logvar = GraphConvolution(
             input_dim=hidden_dim1, 
-            output_dim=hidden_dim2, 
+            output_dim=latent_dim, 
             dropout=dropout, 
             act=F.leaky_relu) 
             
@@ -40,7 +40,7 @@ class GraphVAE(nn.Module):
             act=lambda x: x)
     
         self.latent = LinearBlock(
-            input_dim = hidden_dim2, 
+            input_dim = latent_dim, 
             output_dim = hidden_decoder, 
             dropout = dropout, 
             act = F.leaky_relu, 
@@ -77,10 +77,17 @@ class GraphVAE(nn.Module):
             bias = True)
 
     def encode(self, x, adj) -> Tuple[FloatTensor, FloatTensor]:
+        """
+        The encoder network outputs the mean mu and log variance logvar of the latent variable distribution z.
+        """
         graph_embedding = self.gc(x, adj)
         return self.gc_mu(graph_embedding, adj), self.gc_logvar(graph_embedding, adj)
 
     def reparameterize(self, mu: FloatTensor, logvar: FloatTensor) -> FloatTensor:
+        """
+        The reparameterization trick is used to make the gradients flow through the sampling operation, 
+        which is otherwise non-differentiable. 
+        """
         std = torch.exp(logvar)
         eps = torch.randn_like(std)
         return eps.mul(std).add_(mu)
@@ -93,6 +100,12 @@ class GraphVAE(nn.Module):
         #     return mu
 
     def decode(self, z: FloatTensor) -> Tuple[FloatTensor, FloatTensor, FloatTensor, FloatTensor]:
+        """
+        The decoder network outputs the mean and dispersion parameters of the negative binomial distribution, 
+        and the probability of the point mass at zero. 
+        The mean and dispersion parameters are used to model the count data, 
+        while the probability of the point mass at zero is used to model the excess zeros.
+        """
         output = self.latent(z)
         pi = self.pi(output)
         theta = self.theta(output)
