@@ -9,13 +9,35 @@ from modules.inner_product import InnerProductDecoder
 from modules.linear import LinearBlock
 
 class GraphVAE(nn.Module):   
-    def __init__(self, input_feat_dim, hidden_dim1, hidden_dim2, hidden_decoder, dropout, meanMin=1e-5,meanMax=1e6,thetaMin=1e-5,thetaMax=1e6) -> None:
+    def __init__(self, input_feat_dim, hidden_dim1, hidden_dim2, hidden_decoder, dropout) -> None:
         super(GraphVAE, self).__init__()
-        self.gc = GraphConvolution(input_dim=input_feat_dim, output_dim=hidden_dim1, dropout=dropout, act=F.leaky_relu) 
-        self.gc_mu = GraphConvolution(input_dim=hidden_dim1, output_dim=hidden_dim2, dropout=dropout, act=F.leaky_relu) 
-        self.gc_logvar = GraphConvolution(input_dim=hidden_dim1, output_dim=hidden_dim2, dropout=dropout, act=F.leaky_relu) 
+        
+        meanMin = 1e-5
+        meanMax = 1e6
+        thetaMin = 1e-5
+        thetaMax = 1e6
+        
+        self.gc = GraphConvolution(
+            input_dim=input_feat_dim, 
+            output_dim=hidden_dim1, 
+            dropout=dropout, 
+            act=F.leaky_relu) 
+        
+        self.gc_mu = GraphConvolution(
+            input_dim=hidden_dim1, 
+            output_dim=hidden_dim2, 
+            dropout=dropout, 
+            act=F.leaky_relu) 
+        
+        self.gc_logvar = GraphConvolution(
+            input_dim=hidden_dim1, 
+            output_dim=hidden_dim2, 
+            dropout=dropout, 
+            act=F.leaky_relu) 
             
-        self.adjacency = InnerProductDecoder(dropout=dropout, act=lambda x: x) ## Reconstruct Adj
+        self.adjacency = InnerProductDecoder(
+            dropout=dropout, 
+            act=lambda x: x)
     
         self.latent = LinearBlock(
             input_dim = hidden_dim2, 
@@ -36,7 +58,10 @@ class GraphVAE(nn.Module):
             input_dim = hidden_decoder, 
             output_dim = input_feat_dim, 
             dropout = 0, 
-            act = lambda x: torch.clamp(input=F.softplus(x), min=thetaMin, max=thetaMax),
+            act = lambda x: torch.clamp(
+                        input=F.softplus(x), 
+                        min=thetaMin, 
+                        max=thetaMax),
             batchnorm = False,
             bias = True)
 
@@ -44,18 +69,21 @@ class GraphVAE(nn.Module):
             input_dim = hidden_decoder, 
             output_dim = input_feat_dim, 
             dropout = 0, 
-            act = lambda x: torch.clamp(input=torch.exp(input=x), min=meanMin, max=meanMax),
+            act = lambda x: torch.clamp(
+                        input=torch.exp(input=x), 
+                        min=meanMin, 
+                        max=meanMax),
             batchnorm = False,
             bias = True)
 
     def encode(self, x, adj) -> Tuple[FloatTensor, FloatTensor]:
-        hidden1 = self.gc(x, adj)
-        return self.gc_mu(hidden1, adj), self.gc_logvar(hidden1, adj)
+        graph_embedding = self.gc(x, adj)
+        return self.gc_mu(graph_embedding, adj), self.gc_logvar(graph_embedding, adj)
 
-    def reparameterize(self, mu, logvar) -> FloatTensor:
-        std = torch.exp(input=logvar)
-        eps = torch.randn_like(input=std)
-        return eps.mul(other=std).add_(other=mu)
+    def reparameterize(self, mu: FloatTensor, logvar: FloatTensor) -> FloatTensor:
+        std = torch.exp(logvar)
+        eps = torch.randn_like(std)
+        return eps.mul(std).add_(mu)
     
         # if self.training:
         #     std = torch.exp(logvar)
