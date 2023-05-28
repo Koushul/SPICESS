@@ -1,52 +1,78 @@
 import numpy as np
+import scipy
+from sklearn.neighbors import NearestNeighbors
 import torch
+import scipy.sparse as sp
+from anndata import AnnData
 
-## adapted from https://github.com/Bjarten/early-stopping-pytorch/blob/master/pytorchtools.py
-class EarlyStopping:
-    """Early stops the training if validation loss doesn't improve after a given patience."""
-    def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint.pt', trace_func=print):
-        """
-        Args:
-            patience (int): How long to wait after last time validation loss improved.
-                            Default: 7
-            verbose (bool): If True, prints a message for each validation loss improvement. 
-                            Default: False
-            delta (float): Minimum change in the monitored quantity to qualify as an improvement.
-                            Default: 0
-            path (str): Path for the checkpoint to be saved to.
-                            Default: 'checkpoint.pt'
-            trace_func (function): trace print function.
-                            Default: print            
-        """
-        self.patience = patience
-        self.verbose = verbose
-        self.counter = 0
-        self.best_score = None
-        self.early_stop = False
-        self.val_loss_min = np.Inf
-        self.delta = delta
-        self.path = path
-        self.trace_func = trace_func
-    def __call__(self, val_loss, model):
+def sparse_mx_to_torch_sparse_tensor(sparse_mx):
+    """Convert a scipy sparse matrix to a torch sparse tensor.
+        source: https://github.com/zfjsail/gae-pytorch/blob/master/gae/utils.py"""
+    sparse_mx = sparse_mx.tocoo().astype(np.float32)
+    indices = torch.from_numpy(
+        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
+    values = torch.from_numpy(sparse_mx.data)
+    shape = torch.Size(sparse_mx.shape)
+    return torch.sparse.FloatTensor(indices, values, shape) # type: ignore
 
-        score = -val_loss
+def sparse_to_tuple(sparse_mx):
+    if not sp.isspmatrix_coo(sparse_mx):
+        sparse_mx = sparse_mx.tocoo()
+    coords = np.vstack((sparse_mx.row, sparse_mx.col)).transpose()
+    values = sparse_mx.data
+    shape = sparse_mx.shape
+    return coords, values, shape
 
-        if self.best_score is None:
-            self.best_score = score
-            self.save_checkpoint(val_loss, model)
-        elif score < self.best_score + self.delta:
-            self.counter += 1
-            self.trace_func(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_score = score
-            self.save_checkpoint(val_loss, model)
-            self.counter = 0
+def preprocess_graph(adj):
+    adj = sp.coo_matrix(adj)
+    adj_ = adj + sp.eye(adj.shape[0])
+    rowsum = np.array(adj_.sum(1))
+    degree_mat_inv_sqrt = sp.diags(np.power(rowsum, -0.5).flatten())
+    adj_normalized = adj_.dot(degree_mat_inv_sqrt).transpose().dot(degree_mat_inv_sqrt).tocoo()
+    return sparse_mx_to_torch_sparse_tensor(adj_normalized)
 
-    def save_checkpoint(self, val_loss, model):
-        '''Saves model when validation loss decrease.'''
-        if self.verbose:
-            self.trace_func(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-        torch.save(model.state_dict(), self.path)
-        self.val_loss_min = val_loss
+def getA_knn(sobj_coord_np, k):
+    nbrs = NearestNeighbors(n_neighbors=k, algorithm='kd_tree').fit(sobj_coord_np)
+    a=nbrs.kneighbors_graph(sobj_coord_np, mode='connectivity')
+    a=a-sp.identity(sobj_coord_np.shape[0], format='csr')
+    return a
+
+def clr_normalize_each_cell(adata: AnnData, inplace: bool = False):
+    """Take the logarithm of the surface protein count for each cell, 
+    then center the data by subtracting the geometric mean of the counts across all cells."""
+    def seurat_clr(x):
+        s = np.sum(np.log1p(x[x > 0]))
+        exp = np.exp(s / len(x))
+        return np.log1p(x / exp)
+
+    if not inplace:
+        adata = adata.copy()
+
+    adata.X = np.apply_along_axis(
+        seurat_clr, 1, (adata.X.A if scipy.sparse.issparse(adata.X) else adata.X)
+    )
+    
+    return adata
+
+def plotA(coord,adj):
+    g=nx.from_numpy_matrix(adj)
+    pos={}
+    for n in range(coord.shape[0]):
+        pos[n]=(coord[n][0],coord[n][1])
+    fig, ax = plt.subplots(dpi=200)
+    nx.draw(g, pos, node_size=6, width=0.5)
+    plt.show()
+
+    
+def mask_nodes_edges(nNodes,testNodeSize=0.1,valNodeSize=0.05,seed=3):
+    # randomly select nodes; mask all corresponding rows and columns in loss functions
+    np.random.seed(seed)
+    num_test=int(round(testNodeSize*nNodes))
+    num_val=int(round(valNodeSize*nNodes))
+    all_nodes_idx = np.arange(nNodes)
+    np.random.shuffle(all_nodes_idx)
+    test_nodes_idx = all_nodes_idx[:num_test]
+    val_nodes_idx = all_nodes_idx[num_test:(num_val + num_test)]
+    train_nodes_idx=all_nodes_idx[(num_val + num_test):]
+    
+    return torch.tensor(train_nodes_idx),torch.tensor(val_nodes_idx),torch.tensor(test_nodes_idx)
