@@ -1,9 +1,11 @@
+from matplotlib import pyplot as plt
 import numpy as np
 import scipy
 from sklearn.neighbors import NearestNeighbors
 import torch
 import scipy.sparse as sp
 from anndata import AnnData
+import networkx as nx
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor.
@@ -13,7 +15,7 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
         np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
     values = torch.from_numpy(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
-    return torch.sparse.FloatTensor(indices, values, shape) # type: ignore
+    return torch.sparse.FloatTensor(indices, values, shape)
 
 def sparse_to_tuple(sparse_mx):
     if not sp.isspmatrix_coo(sparse_mx):

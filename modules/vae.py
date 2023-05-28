@@ -101,7 +101,7 @@ class GraphVAE(nn.Module):
     
     def forward(self, x: FloatTensor, adj: LongTensor) -> Namespace:
         output = Namespace()
-        output.mu, output.logvar = self.encode(x=x, adj=adj)
+        output.mu, output.logvar = self.encode(x, adj)
         output.z = self.reparameterize(mu=output.mu, logvar=output.logvar)
         output.adj_recon = self.adjacency(output.z)
         output.features_recon = self.decode(z=output.z)
