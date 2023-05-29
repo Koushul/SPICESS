@@ -48,54 +48,43 @@ class DataBlob:
         
     def __len__(self) -> int:
         return len(self.data)
-    
-    def parse_adts(self, x):
-        elements = x.split('.')
-        for i, e in enumerate(elements):
-            if any(substring in e for substring in ['CD', 'Ig', 'Ly']):
-                if i < len(elements) - 1 and elements[i+1].isdigit():
-                    return f"{e}.{elements[i+1]}"
-                else:
-                    return e
-
-        return None
 
     
-    def train_test_split(self, adata: AnnData):
-        adata.obs['idx'] = list(range(0, len(adata)))
+    # def train_test_split(self, adata: AnnData):
+    #     adata.obs['idx'] = list(range(0, len(adata)))
 
-        xy = adata.obsm['spatial']
-        x = xy[:, 0]
-        y = xy[:, 1]
+    #     xy = adata.obsm['spatial']
+    #     x = xy[:, 0]
+    #     y = xy[:, 1]
 
-        xmin, ymin = adata.obsm['spatial'].min(0)
-        xmax, ymax = adata.obsm['spatial'].max(0)
+    #     xmin, ymin = adata.obsm['spatial'].min(0)
+    #     xmax, ymax = adata.obsm['spatial'].max(0)
 
-        x_segments = np.linspace(xmin, xmax, 4)
-        y_segments = np.linspace(ymin, ymax, 4)
+    #     x_segments = np.linspace(xmin, xmax, 4)
+    #     y_segments = np.linspace(ymin, ymax, 4)
 
-        category = np.zeros_like(x, dtype=int)
+    #     category = np.zeros_like(x, dtype=int)
 
-        for i, (xi, yi) in enumerate(zip(x, y)):
-            for j, (xmin_j, xmax_j) in enumerate(zip(x_segments[:-1], x_segments[1:])):
-                if xmin_j <= xi <= xmax_j:
-                    for k, (ymin_k, ymax_k) in enumerate(zip(y_segments[:-1], y_segments[1:])):
-                        if ymin_k <= yi <= ymax_k:
-                            category[i] = 3*k + j
-                            break
-                    break
+    #     for i, (xi, yi) in enumerate(zip(x, y)):
+    #         for j, (xmin_j, xmax_j) in enumerate(zip(x_segments[:-1], x_segments[1:])):
+    #             if xmin_j <= xi <= xmax_j:
+    #                 for k, (ymin_k, ymax_k) in enumerate(zip(y_segments[:-1], y_segments[1:])):
+    #                     if ymin_k <= yi <= ymax_k:
+    #                         category[i] = 3*k + j
+    #                         break
+    #                 break
 
-        adata.obs['train_test'] = category
+    #     adata.obs['train_test'] = category
     
     
-    def filter_adata_(self, adata: AnnData, min_genes: int = 200, target_sum: int = 1e4):
-        sc.pp.filter_cells(adata, min_genes=min_genes)
-        sc.pp.normalize_total(adata, target_sum=target_sum)
-        sc.pp.log1p(adata)                
-        sc.tl.pca(adata)
-        sc.pp.neighbors(adata)
-        sc.tl.umap(adata)
-        sc.tl.leiden(adata)
+    # def filter_adata_(self, adata: AnnData, min_genes: int = 200, target_sum: int = 1e4):
+    #     sc.pp.filter_cells(adata, min_genes=min_genes)
+    #     sc.pp.normalize_total(adata, target_sum=target_sum)
+    #     sc.pp.log1p(adata)                
+    #     sc.tl.pca(adata)
+    #     sc.pp.neighbors(adata)
+    #     sc.tl.umap(adata)
+    #     sc.tl.leiden(adata)
     
     
     def load_data(self) -> tuple:

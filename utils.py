@@ -1,7 +1,9 @@
+from argparse import Namespace
 from matplotlib import pyplot as plt
 import numpy as np
 import scipy
 from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import MinMaxScaler
 import torch
 import scipy.sparse as sp
 from anndata import AnnData
@@ -78,3 +80,47 @@ def mask_nodes_edges(nNodes,testNodeSize=0.1,valNodeSize=0.05,seed=3):
     train_nodes_idx=all_nodes_idx[(num_val + num_test):]
     
     return torch.tensor(train_nodes_idx),torch.tensor(val_nodes_idx),torch.tensor(test_nodes_idx)
+
+
+
+def featurize(input_adata):
+    varz = Namespace()
+    
+    features = input_adata.copy()
+    featurelog = np.log2(features.X+1/2)
+    scaler = MinMaxScaler()
+    featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))
+    features_raw = torch.tensor(features.X)
+    feature = torch.tensor(featurelog)
+
+    adj = getA_knn(features.obsm['spatial'], 7)
+    adj_label = adj + sp.eye(adj.shape[0])
+    adj_label = torch.tensor(adj_label.toarray()).cuda()
+    pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()).cuda()
+    norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
+    adj_norm = preprocess_graph(adj).cuda()
+
+    feature = feature.float().cuda()
+    adj_norm = adj_norm.float().cuda()
+    maskedgeres= mask_nodes_edges(features.shape[0], testNodeSize=0, valNodeSize=0.1)
+    varz.train_nodes_idx, varz.val_nodes_idx, varz.test_nodes_idx = maskedgeres
+    features_raw = features_raw.cuda()
+
+    coords = torch.tensor(features.obsm['spatial']).float()
+    sp_dists = torch.cdist(coords, coords, p=2)
+    varz.sp_dists = torch.div(sp_dists, torch.max(sp_dists)).cuda()
+    
+    varz.feature = feature
+    varz.sp_dists = sp_dists
+    varz.features_raw = features_raw
+    varz.adj_norm = adj_norm
+    varz.norm = norm
+    varz.pos_weight = pos_weight
+    varz.adj_label = adj_label
+    
+    return varz
+
+def update_vars(v1, v2):
+    v1 = vars(v1)
+    v1.update(vars(v2))
+    return Namespace(**v1)

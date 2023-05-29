@@ -8,13 +8,13 @@ class LossFunctions:
         self.reconWeight = reconWeight
         self.ridgePi = ridgePi
         self.y_true_raw = y_true_raw
-        self.penalties = []
+        self.sp = []
         self.kl = []
         self.ce = []
         self.zinb = []
         self.loss = []
         
-    def penalty(self, z, sp_dists):
+    def SP(self, z, sp_dists):
         """            
         Args:
         - z: tensor of shape (batch_size, latent_dim) representing the latent variables.
@@ -24,6 +24,7 @@ class LossFunctions:
         z_dists = torch.div(z_dists, torch.max(z_dists))
         n_items = z.size(dim=0) * z.size(dim=0)
         p = torch.div(torch.sum(torch.mul(1.0 - z_dists.cuda(), sp_dists.cuda())), n_items).cuda()
+        self.sp.append(float(p))
         return p
     
     def KL(self, mu, logvar, nodemask=None, reduction='mean'):
@@ -38,8 +39,6 @@ class LossFunctions:
         - nodemask: tensor of shape (batch_size,) representing the mask for the nodes.
         - reduction: string representing the reduction method for the KL divergence.
 
-        Returns:
-        - kl: tensor representing the KL divergence.
         """
         if reduction == 'mean':
             f = torch.mean
@@ -146,24 +145,22 @@ class LossFunctions:
 
 
 class LossKZCP(LossFunctions):
-    
-    def compute(self, varz):        
+    """
+    Computes 
+        - KL, 
+        - ZINB, 
+        - CE, 
+        - SP
+    """
+    def compute(self, varz, kl_weight=1.0, recon_weight=1.0, adj_weight=1.0, sp_weight=1.0):        
         loss_kl = self.KL(varz.mu, varz.logvar, varz.train_nodes_idx) ## latent dist vs prior
         loss_x = self.ZINB(varz.features_recon, varz.feature, varz.train_nodes_idx) ## gene reconstruction 
         loss_a = self.CE(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm, varz.train_nodes_idx) ## adj reconstruction
-        loss_p = self.penalty(varz.z, varz.sp_dists)
-        loss = loss_kl + loss_x + loss_a + loss_p
-        self.penalties.append(float(loss_p))
+        loss_p = self.SP(varz.z, varz.sp_dists)
+        
+        loss = kl_weight*loss_kl + recon_weight*loss_x + adj_weight*loss_a + sp_weight*loss_p
         self.loss.append(float(loss))
+        
         return loss
-    
-    
-    def __repr__(self):
-        return f"LossFunctions(penalty={self.penalty.__name__}, " \
-               f"KL={self.KL.__name__}, " \
-               f"CE={self.CE.__name__}, " \
-               f"ZINB={self.ZINB.__name__})"
-
-
 
     
