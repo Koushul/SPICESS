@@ -85,8 +85,9 @@ def mask_nodes_edges(nNodes,testNodeSize=0.1,valNodeSize=0.05,seed=3):
 
 def featurize(input_adata):
     varz = Namespace()
-    
     features = input_adata.copy()
+    features.X = features.X.toarray()
+    
     featurelog = np.log2(features.X+1/2)
     scaler = MinMaxScaler()
     featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))

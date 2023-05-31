@@ -4,10 +4,9 @@ import torch.nn.functional as F
 
 class LossFunctions:
     
-    def __init__(self, reconWeight, ridgePi, y_true_raw):
+    def __init__(self, reconWeight=300, ridgePi=0.05):
         self.reconWeight = reconWeight
         self.ridgePi = ridgePi
-        self.y_true_raw = y_true_raw
         self.sp = []
         self.kl = []
         self.ce = []
@@ -120,7 +119,7 @@ class LossFunctions:
         else: nbloss = nbloss
         return nbloss
 
-    def ZINB(self, preds, y_true, mask, eps=1e-10):
+    def ZINB(self, preds, y_true, mask, y_true_raw, eps=1e-10):
         """
         Calculates the zero-inflated negative binomial reconstruction loss between the predicted and true gene expression values.
         
@@ -131,7 +130,7 @@ class LossFunctions:
         - eps: float representing the epsilon value.
         """
         output, pi, theta, y_pred = preds
-        reconWeight, ridgePi, y_true_raw = self.reconWeight, self.ridgePi, self.y_true_raw
+        reconWeight, ridgePi = self.reconWeight, self.ridgePi
         nb_case = self.NB(preds, y_true, mask, reconWeight, eps=1e-10, ifmean=False)- torch.log(pi+eps)
         zero_nb = torch.pow(theta/(theta+y_pred+eps), theta)
         zero_case = -torch.log(pi + ((1.0-pi)*zero_nb)+eps)
@@ -154,7 +153,7 @@ class LossKZCP(LossFunctions):
     """
     def compute(self, varz, kl_weight=1.0, recon_weight=1.0, adj_weight=1.0, sp_weight=1.0):        
         loss_kl = self.KL(varz.mu, varz.logvar, varz.train_nodes_idx) ## latent dist vs prior
-        loss_x = self.ZINB(varz.features_recon, varz.feature, varz.train_nodes_idx) ## gene reconstruction 
+        loss_x = self.ZINB(varz.features_recon, varz.feature, varz.train_nodes_idx, varz.features_raw) ## gene reconstruction 
         loss_a = self.CE(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm, varz.train_nodes_idx) ## adj reconstruction
         loss_p = self.SP(varz.z, varz.sp_dists)
         

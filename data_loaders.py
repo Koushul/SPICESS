@@ -357,7 +357,7 @@ class DataBlob:
             prot = adata.uns['protein'].copy()
             # prot = prot[:, [i in self.common_proteins for i in map(self.parse_adts, prot.var_names)]]
             prot = prot[:, [list(self.common_proteins).index(i) for i in self.common_proteins]]
-            # prot.var_names = self.common_proteins
+            prot.var_names = self.common_proteins
             adata.uns['protein'] = prot
             adata = adata[:, [cg in self.common_genes for cg in adata.var_names]]
             new_data.append(adata)
@@ -372,7 +372,7 @@ class DataBlob:
         axs = axs.flatten()
         for i in range(num_adatas):
             sq.pl.spatial_scatter(self.data[i], ax=axs[i], frameon=False)
-            axs[i].set_title(f"{self.tissues[i]}")
+            axs[i].set_title(f"{self.tissues[i]}\n{self.data[i].shape[0]} x {self.data[i].shape[1]} x {self.data[i].uns['protein'].shape[1]}", fontsize=10)
         for i in range(num_adatas, len(axs)):
             axs[i].axis('off')
         plt.tight_layout()
