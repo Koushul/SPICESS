@@ -10,6 +10,7 @@ from anndata import AnnData
 import warnings
 warnings.filterwarnings('ignore')
 import squidpy as sq
+from scipy.sparse import csr_matrix
 
 ## https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE213264
 overlaps = lambda items : set.intersection(*map(set, items))
@@ -321,12 +322,14 @@ class DataBlob:
             protein = protein.set_index('X').drop('unmapped', axis=1).loc[rna.X]
             protein.columns = list(map(lambda x: antibody_map[x], protein.columns))
             protein = AnnData(protein)
+            protein.X = csr_matrix(protein.X)
             rna = AnnData(rna.set_index('X'))
             rna.uns['protein'] = protein
             adata = rna
             xy = np.array([(a, b) for a, b in pd.Series(rna.obs.index).str.split('x').apply(
                 lambda x: (int(x[0]), int(x[1]))).values])
             adata.obsm['spatial'] = xy
+            rna.uns['protein'].obsm['spatial'] = xy
             adata.X = sp.csr_matrix(adata.X)
             adata.layers['counts'] = adata.X
             adata.uns['spatial'] = {}

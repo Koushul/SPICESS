@@ -1,7 +1,9 @@
+from argparse import Namespace
 from matplotlib import pyplot as plt
 import torch
 import torch.nn.functional as F
-
+import numpy as np
+from math import prod
 class LossFunctions:
     
     def __init__(self, reconWeight=300, ridgePi=0.05):
@@ -25,6 +27,7 @@ class LossFunctions:
         p = torch.div(torch.sum(torch.mul(1.0 - z_dists.cuda(), sp_dists.cuda())), n_items).cuda()
         self.sp.append(float(p))
         return p
+    
     
     def KL(self, mu, logvar, nodemask=None, reduction='mean'):
         """
@@ -143,6 +146,231 @@ class LossFunctions:
         return zloss
 
 
+class LossFunctionsv2:
+    
+    
+    def compute_distance(self, a, b, dist_method='euclidean'):
+        if dist_method == 'cosine':
+            # Cosine Similarity
+            sim = (
+                torch.mm(a, torch.t(b))
+                / (a.norm(dim=1).reshape(-1, 1) * b.norm(dim=1).reshape(1, -1))
+            )
+            # return sim, 1-sim
+            diff = 1 - sim
+            # sim[sim < 0] = 0
+            # diff[diff < 0] = 0
+            return sim, diff
+
+        elif dist_method == 'euclidean':
+            # Euclidean Distance
+            dist = torch.cdist(a, b, p=2)
+            sim = 1 / (1+dist)
+            sim = 2 * sim - 1  # This scaling line is important
+            sim = sim / sim.max()
+            return sim, dist
+       
+    
+    def binary_cross_entropy(self, preds, labels, pos_weight, norm):
+        cost = norm * F.binary_cross_entropy_with_logits(
+            preds, 
+            labels, 
+            pos_weight=pos_weight,
+            reduction='mean')
+        return cost    
+    
+    def spatial_loss(self, z, sp_dists):
+        z_dists = torch.cdist(z, z, p=2)
+        z_dists = torch.div(z_dists, torch.max(z_dists))
+        n_items = z.size(dim=0) * z.size(dim=0)
+        p = torch.div(torch.sum(torch.mul(1.0 - z_dists.cuda(), sp_dists.cuda())), n_items).cuda()
+        return p 
+        
+    def alignment_loss(self, emb1, emb2, P):
+        """
+        Incentivizes the low-dimensional embeddings for each modality
+        to be on the sam latent space.
+        """
+        P_sum = P.sum(axis=1)
+        P_sum[P_sum==0] = 1
+        P = P / P_sum[:, None]
+        csim, cdiff = self.compute_distance(emb1, emb2)
+        weighted_P_cdiff = cdiff * P
+        alignment_loss = weighted_P_cdiff.absolute().sum() / P.absolute().sum()
+        return alignment_loss
+
+        
+    def sigma_loss(self, sigma):
+        sig_norm = sigma / sigma.sum()
+        sigma_loss = (sig_norm - .5).square().mean()
+        return sigma_loss
+    
+
+    def mean_sq_error(self, reconstructed, data):
+        reconstruction_loss = (reconstructed - data).square().mean(axis=1).mean(axis=0)
+        return reconstruction_loss
+    
+    def cross_loss(self, comb1, comb2, F):
+        comsim1, comdiff1 = self.compute_distance(comb1, comb2)
+        cross_loss = comdiff1 * F
+        cross_loss = cross_loss.sum() / prod(F.shape)
+        return cross_loss
+
+    def kl(self, epoch, epochs, mu, logvar):
+        kl_loss =  -.5 * torch.mean(
+                        1
+                        + logvar
+                        - mu.square()
+                        - logvar.exp(),
+                        axis=1
+                    ).mean(axis=0)
+        
+        c = epochs / 2  # Midpoint
+        kl_anneal = 1 / ( 1 + np.exp( - 5 * (epoch - c) / c ) )
+        kl_loss = 32 * 1e-3 * kl_anneal * kl_loss
+        
+        return kl_loss
+    
+    def f_recons(self, comb1, comb2):
+        corF = torch.eye(comb1.shape[0], comb2.shape[0]).float().cuda()
+        F_est = torch.square(
+                    comb1 - torch.mm(corF, comb2)
+                ).mean(axis=1).mean(axis=0)
+        
+        return F_est
+    
+    def cosine_loss(self, emb1, emb2, comb1, comb2):
+        # Cosine Loss
+        cosim0, codiff0 = self.compute_distance(emb1, comb1)
+        cosim1, codiff1 = self.compute_distance(emb2, comb2)
+        
+        cosine_loss = (
+            torch.diag(codiff0.square()).mean(axis=0) / emb1.shape[1]
+            + torch.diag(codiff1.square()).mean(axis=0) / emb2.shape[1])
+        
+        return 32 * cosine_loss
+
+
+class Lossv2(LossFunctionsv2):
+    
+        
+    def __init__(self, alpha=1):
+        self.alpha = alpha
+        self.history = Namespace()
+        self.history.kl_gex = []
+        self.history.kl_pex = []
+        self.history.recons_gex = []
+        self.history.recons_pex = []
+        self.history.cosine = []
+        self.history.cons = []
+        self.history.spatial = []
+        self.history.adj = [] 
+        self.history.align = [] 
+                  
+
+    def _update_means(self):
+        self.mean_kl_gex = np.mean(self.history.kl_gex)
+        self.mean_kl_pex = np.mean(self.history.kl_pex)
+        self.mean_recons_gex = np.mean(self.history.recons_gex)
+        self.mean_recons_pex = np.mean(self.history.recons_pex)
+        self.mean_cosine = np.mean(self.history.cosine)
+        self.mean_spatial = np.mean(self.history.spatial)
+        self.mean_adj = np.mean(self.history.adj)
+        self.mean_align = np.mean(self.history.align)
+
+    
+    def compute(self, epoch, varz):
+        
+        kl_loss_gex = self.alpha * self.kl(epoch, varz.epochs, varz.gex_mu, varz.gex_logvar)
+        kl_loss_pex = self.alpha * self.kl(epoch, varz.epochs, varz.pex_mu, varz.pex_logvar)
+        self.history.kl_gex.append(float(kl_loss_gex))
+        self.history.kl_pex.append(float(kl_loss_pex))
+        
+        recons_loss_gex = self.alpha * self.mean_sq_error(varz.gex_recons, varz.gex_features_pca)
+        recons_loss_pex = self.alpha * self.mean_sq_error(varz.pex_recons, varz.pex_features_pca)
+        self.history.recons_gex.append(float(recons_loss_gex))
+        self.history.recons_pex.append(float(recons_loss_pex))
+        
+        cosine_loss = self.alpha * self.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
+        self.history.cosine.append(float(cosine_loss))
+        
+        consistency_loss = self.alpha * self.f_recons(varz.gex_c, varz.pex_c)
+        self.history.cons.append(float(consistency_loss))
+        
+        adj_loss = self.alpha * self.binary_cross_entropy(
+            varz.adj_recon, varz.adj_label, 
+            varz.pos_weight, varz.norm)
+        self.history.adj.append(float(adj_loss))
+        
+        spatial_loss = self.alpha * self.spatial_loss(varz.gex_z, varz.gex_sp_dist)
+        self.history.spatial.append(float(spatial_loss))
+        
+        alignment_loss = self.alpha * self.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
+        self.history.align.append(float(alignment_loss))
+        
+        self._update_means()
+        
+        return kl_loss_gex + \
+            kl_loss_pex +  \
+            recons_loss_gex + \
+            recons_loss_pex + \
+            cosine_loss + \
+            consistency_loss + adj_loss + spatial_loss
+    
+    
+    
+
+class Loss(LossFunctionsv2):
+    
+    gex = Namespace()
+    pex = Namespace()
+    gex.kl = []
+    pex.kl = []
+    gex.recons = []
+    pex.recos = []
+    cosine = []
+    f_est = []
+    
+    def __init__(self, alpha=1):
+        self.alpha = alpha
+    
+    def compute(self, 
+                epoch, 
+                varz, 
+                # sigma
+            ):
+        
+        kl_loss_gex = self.kl(epoch, varz.epochs, varz.gex_mu, varz.gex_logvar)
+        kl_loss_pex = self.kl(epoch, varz.epochs, varz.pex_mu, varz.pex_logvar)
+        
+        self.gex.kl.append(float(kl_loss_gex))
+        self.pex.kl.append(float(kl_loss_pex))
+        
+        recons_loss_gex = self.mean_sq_error(varz.gex_recons, varz.gex_features_pca)
+        recons_loss_pex = self.mean_sq_error(varz.pex_recons, varz.pex_features_pca)
+        
+        self.gex.recons.append(float(recons_loss_gex))
+        self.pex.recos.append(float(recons_loss_pex))
+        
+        cosine_loss = self.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
+        F_est = self.f_recons(varz.gex_c, varz.pex_c)
+        
+        self.cosine.append(float(cosine_loss))
+        self.f_est.append(float(F_est))
+        
+        # sigma_loss = self.sigma_loss(sigma)
+        
+        return self.alpha * (kl_loss_gex + \
+            kl_loss_pex +  \
+            recons_loss_gex + \
+            recons_loss_pex + \
+            cosine_loss + \
+            F_est)
+            # sigma_loss
+    
+    
+    
+    
 class LossKZCP(LossFunctions):
     """
     Computes 

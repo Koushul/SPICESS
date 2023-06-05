@@ -10,6 +10,7 @@ class LinearBlock(nn.Module):
         self.act = act
         self.batchnorm = batchnorm
         self.linearlayer = nn.Linear(input_dim,output_dim,bias=bias)
+        
         if batchnorm:
             self.batchnormlayer = nn.BatchNorm1d(output_dim)
     

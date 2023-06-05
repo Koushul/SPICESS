@@ -2,12 +2,14 @@ from argparse import Namespace
 from matplotlib import pyplot as plt
 import numpy as np
 import scipy
+from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import MinMaxScaler
 import torch
 import scipy.sparse as sp
 from anndata import AnnData
 import networkx as nx
+from scipy.sparse import csr_matrix
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor.
@@ -82,16 +84,24 @@ def mask_nodes_edges(nNodes,testNodeSize=0.1,valNodeSize=0.05,seed=3):
     return torch.tensor(train_nodes_idx),torch.tensor(val_nodes_idx),torch.tensor(test_nodes_idx)
 
 
-
-def featurize(input_adata):
+def featurize(input_adata, pca_dim=2048, clr=False):
     varz = Namespace()
     features = input_adata.copy()
+    features.X = csr_matrix(features.X)
     features.X = features.X.toarray()
+    features_raw = torch.tensor(features.X)
+    pca_dim = min(features_raw.shape[1], pca_dim)
+    pca_dim = min(pca_dim, features_raw.shape[0])
+    
+    varz.pca = PCA(n_components=pca_dim).fit(features_raw)
+    varz.features_pca = torch.tensor(varz.pca.fit_transform(features_raw)).float().cuda()
+    
+    if clr:
+        features = clr_normalize_each_cell(features)
     
     featurelog = np.log2(features.X+1/2)
     scaler = MinMaxScaler()
     featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))
-    features_raw = torch.tensor(features.X)
     feature = torch.tensor(featurelog)
 
     adj = getA_knn(features.obsm['spatial'], 7)
@@ -111,7 +121,9 @@ def featurize(input_adata):
     sp_dists = torch.cdist(coords, coords, p=2)
     varz.sp_dists = torch.div(sp_dists, torch.max(sp_dists)).cuda()
     
-    varz.feature = feature
+
+    
+    varz.features = feature
     varz.sp_dists = sp_dists
     varz.features_raw = features_raw
     varz.adj_norm = adj_norm
