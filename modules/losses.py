@@ -254,8 +254,7 @@ class LossFunctionsv2:
 class Lossv2(LossFunctionsv2):
     
         
-    def __init__(self, alpha=1):
-        self.alpha = alpha
+    def __init__(self):
         self.history = Namespace()
         self.history.kl_gex = []
         self.history.kl_pex = []
@@ -266,6 +265,18 @@ class Lossv2(LossFunctionsv2):
         self.history.spatial = []
         self.history.adj = [] 
         self.history.align = [] 
+        
+        self.alpha = {
+            'kl_gex': 1,
+            'kl_pex': 1,
+            'recons_gex': 1,
+            'recons_pex': 1,
+            'cosine': 1,
+            'consistency': 1,
+            'adj': 1,
+            'spatial': 1,
+            'alignment': 1
+        }
                   
 
     def _update_means(self):
@@ -281,32 +292,33 @@ class Lossv2(LossFunctionsv2):
     
     def compute(self, epoch, varz):
         
-        kl_loss_gex = self.alpha * self.kl(epoch, varz.epochs, varz.gex_mu, varz.gex_logvar)
-        kl_loss_pex = self.alpha * self.kl(epoch, varz.epochs, varz.pex_mu, varz.pex_logvar)
+        kl_loss_gex = self.alpha['kl_gex'] * self.kl(epoch, varz.epochs, varz.gex_mu, varz.gex_logvar)
+        kl_loss_pex = self.alpha['kl_pex'] * self.kl(epoch, varz.epochs, varz.pex_mu, varz.pex_logvar)
         self.history.kl_gex.append(float(kl_loss_gex))
         self.history.kl_pex.append(float(kl_loss_pex))
         
-        recons_loss_gex = self.alpha * self.mean_sq_error(varz.gex_recons, varz.gex_features_pca)
-        recons_loss_pex = self.alpha * self.mean_sq_error(varz.pex_recons, varz.pex_features_pca)
+        recons_loss_gex = self.alpha['recons_gex'] * self.mean_sq_error(varz.gex_recons, varz.gex_features_pca)
+        recons_loss_pex = self.alpha['recons_pex'] * self.mean_sq_error(varz.pex_recons, varz.pex_features_pca)
         self.history.recons_gex.append(float(recons_loss_gex))
         self.history.recons_pex.append(float(recons_loss_pex))
         
-        cosine_loss = self.alpha * self.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
+        cosine_loss = self.alpha['cosine'] * self.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
         self.history.cosine.append(float(cosine_loss))
         
-        consistency_loss = self.alpha * self.f_recons(varz.gex_c, varz.pex_c)
+        consistency_loss = self.alpha['consistency'] * self.f_recons(varz.gex_c, varz.pex_c)
         self.history.cons.append(float(consistency_loss))
         
-        adj_loss = self.alpha * self.binary_cross_entropy(
+        adj_loss = self.alpha['adj'] * self.binary_cross_entropy(
             varz.adj_recon, varz.adj_label, 
             varz.pos_weight, varz.norm)
         self.history.adj.append(float(adj_loss))
         
-        spatial_loss = self.alpha * self.spatial_loss(varz.gex_z, varz.gex_sp_dist)
+        spatial_loss = self.alpha['spatial'] * self.spatial_loss(varz.gex_z, varz.gex_sp_dist)
         self.history.spatial.append(float(spatial_loss))
         
-        alignment_loss = self.alpha * self.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
+        alignment_loss = self.alpha['alignment'] * self.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
         self.history.align.append(float(alignment_loss))
+        
         
         self._update_means()
         
