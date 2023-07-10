@@ -1,0 +1,28 @@
+program: train.py
+method: bayes
+metric:
+  goal: maximize
+  name: "oracle"
+parameters:
+  learning_rate: 
+    values: [1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6]
+  weight_decay: 
+    values: [1e-1, 1e-2, 1e-3, 1e-5, 1e-10, 1e-20]
+  kl_gex:
+    values: [1e-1, 1e-3, 1e-5, 1e-10, 1e-15, 1e-18, 1e-20]
+  kl_pex:
+    values: [1e-1, 1e-3, 1e-5, 1e-10, 1e-15, 1e-18, 1e-20]
+  recons_gex:
+    values: [1000, 100, 1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-8, 1e-12]
+  recons_pex:
+    values: [1000, 100, 1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-8, 1e-12] 
+  cosine: 
+    values: [1e-1, 1e-3, 1e-5, 1e-10, 1e-15, 1e-18, 1e-20]
+  consistency: 
+    values: [1e-1, 1e-3, 1e-5, 1e-10, 1e-15, 1e-18, 1e-20]
+  adj:
+    values: [1e-1, 1e-3, 1e-5, 1e-10, 1e-15, 1e-18, 1e-20]
+  spatial: 
+    values: [1e-1, 1e-3, 1e-5, 1e-10, 1e-15, 1e-18, 1e-20]
+  alignment: 
+    values: [1e-1, 1e-3, 1e-5, 1e-10, 1e-15, 1e-18, 1e-20]

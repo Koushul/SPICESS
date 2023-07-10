@@ -579,3 +579,11 @@ class SpatialVAE(nn.Module):
         output.gex_recons, output.pex_recons = X_hat
         output.adj_recon = self.adjacency(combined[0])        
         return output
+    
+    @torch.no_grad()
+    def swap_latent(self, source, adj, from_modality=0, to_modality=1):
+        self.eval()
+        encoded_source = self.encoders[from_modality](source, adj)
+        z = self.fc_mus[from_modality](encoded_source, adj)
+        decoded = self.decoders[to_modality](z)
+        return decoded        

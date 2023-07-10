@@ -189,7 +189,7 @@ class LossFunctionsv2:
     def alignment_loss(self, emb1, emb2, P):
         """
         Incentivizes the low-dimensional embeddings for each modality
-        to be on the sam latent space.
+        to be on the same latent space.
         """
         P_sum = P.sum(axis=1)
         P_sum[P_sum==0] = 1
@@ -294,40 +294,46 @@ class Lossv2(LossFunctionsv2):
         
         kl_loss_gex = self.alpha['kl_gex'] * self.kl(epoch, varz.epochs, varz.gex_mu, varz.gex_logvar)
         kl_loss_pex = self.alpha['kl_pex'] * self.kl(epoch, varz.epochs, varz.pex_mu, varz.pex_logvar)
-        self.history.kl_gex.append(float(kl_loss_gex))
-        self.history.kl_pex.append(float(kl_loss_pex))
+        # self.history.kl_gex.append(float(kl_loss_gex))
+        # self.history.kl_pex.append(float(kl_loss_pex))
         
         recons_loss_gex = self.alpha['recons_gex'] * self.mean_sq_error(varz.gex_recons, varz.gex_features_pca)
         recons_loss_pex = self.alpha['recons_pex'] * self.mean_sq_error(varz.pex_recons, varz.pex_features_pca)
-        self.history.recons_gex.append(float(recons_loss_gex))
-        self.history.recons_pex.append(float(recons_loss_pex))
+        # self.history.recons_gex.append(float(recons_loss_gex))
+        # self.history.recons_pex.append(float(recons_loss_pex))
         
         cosine_loss = self.alpha['cosine'] * self.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
-        self.history.cosine.append(float(cosine_loss))
+        # self.history.cosine.append(float(cosine_loss))
         
         consistency_loss = self.alpha['consistency'] * self.f_recons(varz.gex_c, varz.pex_c)
-        self.history.cons.append(float(consistency_loss))
+        # self.history.cons.append(float(consistency_loss))
         
         adj_loss = self.alpha['adj'] * self.binary_cross_entropy(
             varz.adj_recon, varz.adj_label, 
             varz.pos_weight, varz.norm)
-        self.history.adj.append(float(adj_loss))
+        # self.history.adj.append(float(adj_loss))
         
         spatial_loss = self.alpha['spatial'] * self.spatial_loss(varz.gex_z, varz.gex_sp_dist)
-        self.history.spatial.append(float(spatial_loss))
+        # self.history.spatial.append(float(spatial_loss))
         
         alignment_loss = self.alpha['alignment'] * self.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
-        self.history.align.append(float(alignment_loss))
+        # self.history.align.append(float(alignment_loss))
         
+        return (
+            kl_loss_gex, kl_loss_pex, 
+            recons_loss_gex, recons_loss_pex, 
+            cosine_loss, consistency_loss, 
+            adj_loss, spatial_loss, alignment_loss
+        )        
         
-        self._update_means()
+        # self._update_means()
         
-        return kl_loss_gex + \
-            kl_loss_pex +  \
-            recons_loss_gex + \
-            recons_loss_pex + \
-            cosine_loss + \
-            consistency_loss + adj_loss + spatial_loss
+        # return kl_loss_gex + \
+        #     kl_loss_pex +  \
+        #     recons_loss_gex + \
+        #     recons_loss_pex + \
+        #     cosine_loss + \
+        #     consistency_loss + adj_loss + spatial_loss
     
     
     

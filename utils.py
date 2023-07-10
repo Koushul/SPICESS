@@ -90,11 +90,11 @@ def featurize(input_adata, pca_dim=2048, clr=False):
     features.X = csr_matrix(features.X)
     features.X = features.X.toarray()
     features_raw = torch.tensor(features.X)
-    pca_dim = min(features_raw.shape[1], pca_dim)
-    pca_dim = min(pca_dim, features_raw.shape[0])
+    # pca_dim = min(features_raw.shape[1], pca_dim)
+    # pca_dim = min(pca_dim, features_raw.shape[0])
     
-    varz.pca = PCA(n_components=pca_dim).fit(features_raw)
-    varz.features_pca = torch.tensor(varz.pca.fit_transform(features_raw)).float().cuda()
+    # varz.pca = PCA(n_components=pca_dim).fit(features_raw)
+    # varz.features_pca = torch.tensor(varz.pca.fit_transform(features_raw)).float().cuda()
     
     if clr:
         features = clr_normalize_each_cell(features)

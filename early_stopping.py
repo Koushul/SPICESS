@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import torch
 
@@ -27,6 +28,7 @@ class EarlyStopping:
         self.val_loss_min = np.Inf
         self.delta = delta
         self.path = path
+        self.best_model = None
 
     def __call__(self, val_loss, model):
 
@@ -41,8 +43,9 @@ class EarlyStopping:
                 self.early_stop = True
         else:
             self.best_score = score
-            self.save_checkpoint(val_loss, model)
+            # self.save_checkpoint(val_loss, model)
             self.counter = 0
+            self.best_model = copy.deepcopy(model)
 
     def save_checkpoint(self, val_loss, model):
         torch.save(model.state_dict(), self.path)
