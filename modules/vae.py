@@ -460,7 +460,7 @@ class SpatialVAE(nn.Module):
     def __init__(
         self,
         input_dim,
-        output_dim,
+        output_dim=32,
         dropout=0,
         encoder_dim = 64,
         latent_dim=32,
@@ -509,7 +509,7 @@ class SpatialVAE(nn.Module):
         self.decoders = []
         for i in range(self.num_modalities):
             self.decoders.append(nn.Sequential(
-                nn.Linear(output_dim, input_dim[i]),
+                nn.Linear(latent_dim, input_dim[i]),
                 nn.BatchNorm1d(input_dim[i]),
                 nn.LeakyReLU(),
                 nn.Dropout(dropout),
