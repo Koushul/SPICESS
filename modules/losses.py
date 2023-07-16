@@ -98,16 +98,18 @@ class LossFunctions:
         return cost    
     
     @staticmethod
-    def spatial_loss(z, sp_dists):
+    def spatial_loss(z1, z2, sp_dists):
         """
         Pushes the closeness between embeddings to 
         not only reflect the expression similarity 
         but also their spatial proximity
         """
-        z_dists = torch.cdist(z, z, p=2)
-        z_dists = torch.div(z_dists, torch.max(z_dists))
-        n_items = z.size(dim=0) * z.size(dim=0)
-        sp_loss = torch.div(torch.sum(torch.mul(1.0 - z_dists, sp_dists)), n_items)
+        sp_loss = 0
+        for z in [z1, z2]:
+            z_dists = torch.cdist(z, z, p=2)
+            z_dists = torch.div(z_dists, torch.max(z_dists))
+            n_items = z.size(dim=0) * z.size(dim=0)
+            sp_loss += torch.div(torch.sum(torch.mul(1.0 - z_dists, sp_dists)), n_items)
         return sp_loss 
         
     @staticmethod
@@ -173,17 +175,24 @@ class LossFunctions:
         
         return F_est
     
+    # @staticmethod
+    # def cosine_loss(emb1, emb2, comb1, comb2):
+    #     """Controls the cosine similarity between cross modality embeddings."""
+    #     _, codiff0 = compute_distance(emb1, comb1)
+    #     _, codiff1 = compute_distance(emb2, comb2)
+        
+    #     cosine_loss = (
+    #         torch.diag(codiff0.square()).mean(axis=0) / emb1.shape[1]
+    #         + torch.diag(codiff1.square()).mean(axis=0) / emb2.shape[1])
+        
+    #     return cosine_loss
+    
     @staticmethod
-    def cosine_loss(emb1, emb2, comb1, comb2):
-        """Controls the cosine similarity between cross modality embeddings."""
-        _, codiff0 = compute_distance(emb1, comb1)
-        _, codiff1 = compute_distance(emb2, comb2)
-        
-        cosine_loss = (
-            torch.diag(codiff0.square()).mean(axis=0) / emb1.shape[1]
-            + torch.diag(codiff1.square()).mean(axis=0) / emb2.shape[1])
-        
+    def cosine_loss(emb, comb):
+        _, codiff = compute_distance(emb, comb)
+        cosine_loss = torch.diag(codiff.square()).mean(axis=0) / emb.shape[1]
         return cosine_loss
+
 
 
 
@@ -210,7 +219,8 @@ class Loss:
             'kl_pex': self._base_alpha,
             'recons_gex': self._base_alpha,
             'recons_pex': self._base_alpha,
-            'cosine': self._base_alpha,
+            'cosine_gex': self._base_alpha,
+            'cosine_pex': self._base_alpha,
             'consistency': self._base_alpha,
             'adj': self._base_alpha,
             'spatial': self._base_alpha,
@@ -229,10 +239,11 @@ class Loss:
         ledger.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
         ledger.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
         ledger.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
-        ledger.cosine_loss = a['cosine'] * LossFunctions.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
+        ledger.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
+        ledger.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
         ledger.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
         ledger.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
-        ledger.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.gex_sp_dist)
+        ledger.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
         ledger.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
         ledger.sigma_loss = a['sigma'] * LossFunctions.sigma_loss(varz.sigma)
                 

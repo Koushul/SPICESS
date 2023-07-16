@@ -17,8 +17,6 @@ def euclidean_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
-    """Convert a scipy sparse matrix to a torch sparse tensor.
-        source: https://github.com/zfjsail/gae-pytorch/blob/master/gae/utils.py"""
     sparse_mx = sparse_mx.tocoo().astype(np.float32)
     indices = torch.from_numpy(
         np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
@@ -155,4 +153,10 @@ def feature_corr(preds, targets):
     assert preds.shape == targets.shape
     return [spearmanr(targets[:, i], preds[:, i]).statistic \
                 for i in range(targets.shape[1])]
+    
+
+from sklearn.metrics import roc_auc_score
+
+def adj_auc(adj, adj_predicted) -> float:
+    return roc_auc_score(adj.flatten(), adj_predicted.flatten())
     

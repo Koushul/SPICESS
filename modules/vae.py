@@ -14,7 +14,6 @@ class JointVAE(nn.Module):
     def __init__(
         self,
         input_dim,
-        output_dim=32,
         dropout=0,
         encoder_dim = 64,
         latent_dim=32,
@@ -23,25 +22,20 @@ class JointVAE(nn.Module):
 
         self.num_modalities = 2
         
-        if dropout is None:
-            dropout = .6 if max(input_dim) > 64 else 0
-        
-        self.encoders = []
-        for i in range(self.num_modalities):
-            self.encoders.append(
-                GraphConvolution(
-                    input_dim=input_dim[i], 
-                    output_dim=encoder_dim, 
-                    dropout=dropout, 
-                    act=F.leaky_relu
-                )
+        self.encoders = nn.ModuleList([
+            GraphConvolution(
+                input_dim=input_dim[0], 
+                output_dim=encoder_dim, 
+                dropout=dropout, 
+                act=F.leaky_relu
+            ),
+            GraphConvolution(
+                input_dim=input_dim[1], 
+                output_dim=encoder_dim, 
+                dropout=dropout, 
+                act=F.leaky_relu
             )
-        self.encoders = nn.ModuleList(self.encoders)
-
-        intermediate_dim = []
-        for i in range(self.num_modalities):
-            intermediate_dim.append(input_dim[i])
-
+        ])
 
         self.fc_mus = nn.ModuleList([
             GraphConvolution(
