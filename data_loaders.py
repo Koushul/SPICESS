@@ -218,54 +218,33 @@ antibody_map = {'Armenian.Hamster.IgG.Isotype.Ctrl.CCTGTCATTAAGACT': 'IgG',
  'anti.rat.CD90.mouse.CD90.1.AGTATGGGATGCAAT': 'CD90'}
 
 from scipy.sparse import csr_matrix
-
+from utils import train_test_split, featurize
+import torch
 
 class Tissue:
 
-    def __init__(self, adata: AnnData, tissue_type=None, organism=None):
+    def __init__(self, adata, pdata=None, tissue_type=None, organism=None):
         self.adata = adata
-        self.adata_original = adata.copy()
+        self.pdata = pdata
+        self.pdata.obsm['spatial'] = self.adata.obsm['spatial']
         self.tissue_type = tissue_type
         self.organism = organism
-        self.train_test_split()
+        train_test_split(self.adata)
+        if self.pdata is not None:
+            self.pdata.obs['train_test'] = self.adata.obs['train_test']
+            self.pdata.obs.train_test = self.pdata.obs.train_test.astype('category')
+        self.adata.obs.train_test = self.adata.obs.train_test.astype('category')
         if isinstance(self.adata.X, csr_matrix):
             self.adata.X = self.adata.X.toarray()
-        self.image = None
-        self.gex = None
-        self.pex = None
+        if isinstance(self.pdata.X, csr_matrix):
+            self.pdata.X = self.pdata.X.toarray()
         
-    def restore(self):
-        self.adata = self.adata_original.copy()
-        
-    @property
-    def shape(self):
-        return self.adata.shape
-    
+        self.gex = featurize(adata)
+        self.pex = featurize(pdata)
 
         
-    def train_test_split(self):
-        adata = self.adata
-        adata.obs['idx'] = list(range(0, len(adata)))
-        xy = adata.obsm['spatial']
-        x = xy[:, 0]
-        y = xy[:, 1]
-        xmin, ymin = adata.obsm['spatial'].min(0)
-        xmax, ymax = adata.obsm['spatial'].max(0)
-        x_segments = np.linspace(xmin, xmax, 4)
-        y_segments = np.linspace(ymin, ymax, 4)
-        category = np.zeros_like(x, dtype=int)
-        for i, (xi, yi) in enumerate(zip(x, y)):
-            for j, (xmin_j, xmax_j) in enumerate(zip(x_segments[:-1], x_segments[1:])):
-                if xmin_j <= xi <= xmax_j:
-                    for k, (ymin_k, ymax_k) in enumerate(zip(y_segments[:-1], y_segments[1:])):
-                        if ymin_k <= yi <= ymax_k:
-                            category[i] = 3*k + j
-                            break
-                    break
-        adata.obs['train_test'] = category
-        adata.obs['train_test'] = adata.obs['train_test'].astype('category')
 
-class BioDatasets:
+class TissueCollection:
     def __init__(self, datapath: str) -> None:
         self.datapath = Path(datapath)
         self.data = []

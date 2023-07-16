@@ -3,7 +3,7 @@ sys.path.append('..')
 from data_loaders import DataBlob
 from utils import featurize, update_vars
 import scanpy as sc
-from modules.vae import SpatialVAE
+from modules.vae import JointVAE
 from torch import optim
 from modules.losses import Lossv2
 from early_stopping import EarlyStopping
@@ -86,7 +86,7 @@ def main():
     wd = wandb.config['weight_decay']
     
     
-    model = SpatialVAE([d11.shape[1], d12.shape[1]], 32).cuda()
+    model = JointVAE([d11.shape[1], d12.shape[1]], 32).cuda()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
     es = EarlyStopping(patience=5000, verbose=False, delta=1e-4, path='gvae.pth')
     loss_func = Lossv2()

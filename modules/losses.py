@@ -1,177 +1,95 @@
 from argparse import Namespace
+from typing import Any, Tuple
 from matplotlib import pyplot as plt
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 import numpy as np
 from math import prod
-class LossFunctions:
-    
-    def __init__(self, reconWeight=300, ridgePi=0.05):
-        self.reconWeight = reconWeight
-        self.ridgePi = ridgePi
-        self.sp = []
-        self.kl = []
-        self.ce = []
-        self.zinb = []
-        self.loss = []
+from torchmetrics.aggregation import MeanMetric
+
+
+def compute_distance(a, b, dist_method='euclidean'):
+    if dist_method == 'cosine':
+        # Cosine Similarity
+        sim = (
+            torch.mm(a, torch.t(b))
+            / (a.norm(dim=1).reshape(-1, 1) * b.norm(dim=1).reshape(1, -1))
+        )
+        diff = 1 - sim
+        return sim, diff
+
+    elif dist_method == 'euclidean':
+        # Euclidean Distance
+        dist = torch.cdist(a, b, p=2)
+        sim = 1 / (1+dist)
+        sim = 2 * sim - 1  # This scaling line is important
+        sim = sim / sim.max()
+        return sim, dist
+
+_f = lambda x: float(x)
+class Metrics:
+    def __init__(self, track=False, alpha=1.0):
+        self.track = track
+        self.means = Namespace()
+        self.counters = {}
+        self.values = Namespace()
+        self.losses = []
         
-    def SP(self, z, sp_dists):
-        """            
-        Args:
-        - z: tensor of shape (batch_size, latent_dim) representing the latent variables.
-        - sp_dists: tensor of shape (batch_size, batch_size) representing the shortest path distances between nodes.
-        """
-        z_dists = torch.cdist(z, z, p=2)
-        z_dists = torch.div(z_dists, torch.max(z_dists))
-        n_items = z.size(dim=0) * z.size(dim=0)
-        p = torch.div(torch.sum(torch.mul(1.0 - z_dists.cuda(), sp_dists.cuda())), n_items).cuda()
-        self.sp.append(float(p))
-        return p
+    def __str__(self) -> str:
+        str_repr = ''
+        for k, v in self.means.__dict__.items():
+            str_repr+=f'{k}: {v:.3f}'
+            str_repr+=' | '
+            
+        str_repr+=f'loss: {np.mean(self.losses):.3f}'
+        return str_repr
     
+    def __repr__(self) -> str:
+        return self.__str__()  
     
-    def KL(self, mu, logvar, nodemask=None, reduction='mean'):
-        """
-        Calculates the KL divergence between the latent distribution and the prior distribution.
-        Given two probability distributions P and Q, 
-        the KL divergence from P to Q measures the amount of information lost when Q is used to approximate P.
+    def custom_repr(self, keys):
+        ...  
+    
+    def update_value(self, name, value):
+        ... 
 
-        Args:
-        - mu: tensor of shape (batch_size, latent_dim) representing the mean of the latent distribution.
-        - logvar: tensor of shape (batch_size, latent_dim) representing the log variance of the latent distribution.
-        - nodemask: tensor of shape (batch_size,) representing the mask for the nodes.
-        - reduction: string representing the reduction method for the KL divergence.
-
-        """
-        if reduction == 'mean':
-            f = torch.mean
-            if nodemask is None:
-                s = mu.size()[0]
+        
+    def update(self, ledger):
+        loss = 0
+        _means = self.means.__dict__
+        for name, value in ledger.__dict__.items(): 
+            loss += value
+            if name not in _means:
+                _means[name] = _f(value)
+                self.counters[name] = 0
+                if self.track:
+                    _means[name] = [_f(value)]
             else:
-                s = nodemask.size()[0]
+                _means[name] = _f(
+                    (_means[name]*self.counters[name]) + value
+                )
+                if self.track:
+                    _means[name].append(_f(value))
+            self.counters[name] += 1
+        self.losses.append(_f(loss))
         
-        elif reduction == 'sum':
-            f = torch.sum
-            s = 1
-        
-        if nodemask is None:
-            kl = -(0.5 / s) * torch.sum(1 + 2 * logvar - mu.pow(2) - logvar.exp().pow(2), 1)
-            return kl
-        
-        kl = -(0.5 / s) * f(torch.sum(1 + 2 * logvar[nodemask] - mu[nodemask].pow(2) - logvar[nodemask].exp().pow(2), 1))
+        return loss
+    
+    def __call__(self, ledger):
+        return self.update(ledger)
+    
+    def get(self, name):
+        return self.mean.__dict__.get(name, None)
 
-        self.kl.append(float(kl))
-        return kl
+    def get_values(self, name):
+        return self.values.__dict__.get(name, None)
     
     
-    
-    def CE(self, preds, labels, pos_weight, norm, nodemask=None):
-        """
-        Calculates the cross-entropy loss between the predicted and true adjacency matrices.
-        The pos_weight argument is used to weight the positive class, 
-        and the norm argument is used to normalize the loss by the number of nodes in the graph.
-        
-        Args:
-        - preds: tensor of shape (batch_size, batch_size) representing the predicted adjacency matrix.
-        - labels: tensor of shape (batch_size, batch_size) representing the true adjacency matrix.
-        - pos_weight: float representing the weight of the positive class.
-        - norm: float representing the normalization factor.
-        - nodemask: tensor of shape (batch_size,) representing the mask for the nodes.
-        
-        Returns:
-        - cost: tensor representing the cross-entropy loss.
-        """
-        if nodemask is None:
-            cost = norm * F.binary_cross_entropy_with_logits(
-                preds, 
-                labels, 
-                pos_weight=pos_weight,
-                reduction='mean')
-            return cost
-        
-        cost = norm * F.binary_cross_entropy_with_logits(
-            preds[nodemask,:][:,nodemask], 
-            labels[nodemask,:][:,nodemask], 
-            pos_weight=pos_weight,
-            reduction='mean')
-        
-        self.ce.append(float(cost))
-        return cost
+class LossFunctions:
 
-    def MSE(self, preds, inputs, mask, reconWeight, mse):
-        cost = mse(preds[mask], inputs[mask])*reconWeight
-        return cost
-
-
-    def NB(self, preds, y_true, mask, reconWeight, eps=1e-10, ifmean=True):
-        """
-        Calculates the negative binomial reconstruction loss between the predicted and true gene expression values.
-        
-        Args:
-        - preds: tuple of tensors representing the predicted gene expression values, pi, theta, and y_pred.
-        - y_true: tensor of shape (batch_size,) representing the true gene expression values.
-        - mask: tensor of shape (batch_size,) representing the mask for the nodes.
-        - reconWeight: float representing the weight of the reconstruction loss.
-        - eps: float representing the epsilon value.
-        - ifmean: boolean representing whether to calculate the mean or not.
-        """
-        output, pi, theta, y_pred = preds
-        nbloss1 = torch.lgamma(theta+eps) + torch.lgamma(y_true+1.0) - torch.lgamma(y_true+theta+eps)
-        nbloss2 = (theta + y_true) * torch.log(1.0 + (y_pred/(theta+eps))) + (y_true * (torch.log(theta+eps) - torch.log(y_pred+eps)))
-        nbloss = nbloss1 + nbloss2
-        if ifmean: nbloss = torch.mean(nbloss[mask])*reconWeight
-        else: nbloss = nbloss
-        return nbloss
-
-    def ZINB(self, preds, y_true, mask, y_true_raw, eps=1e-10):
-        """
-        Calculates the zero-inflated negative binomial reconstruction loss between the predicted and true gene expression values.
-        
-        Args:
-        - preds: tuple of tensors representing the predicted gene expression values, pi, theta, and y_pred.
-        - y_true: tensor of shape (batch_size,) representing the true gene expression values.
-        - mask: tensor of shape (batch_size,) representing the mask for the nodes.
-        - eps: float representing the epsilon value.
-        """
-        output, pi, theta, y_pred = preds
-        reconWeight, ridgePi = self.reconWeight, self.ridgePi
-        nb_case = self.NB(preds, y_true, mask, reconWeight, eps=1e-10, ifmean=False)- torch.log(pi+eps)
-        zero_nb = torch.pow(theta/(theta+y_pred+eps), theta)
-        zero_case = -torch.log(pi + ((1.0-pi)*zero_nb)+eps)
-        result = torch.where(torch.lt(y_true_raw, 1), zero_case, nb_case)
-        ridge = ridgePi*pi*pi
-        result += ridge
-        result = torch.mean(result[mask])
-        zloss = result*reconWeight
-        self.zinb.append(float(zloss))
-        return zloss
-
-
-class LossFunctionsv2:
-    
-    
-    def compute_distance(self, a, b, dist_method='euclidean'):
-        if dist_method == 'cosine':
-            # Cosine Similarity
-            sim = (
-                torch.mm(a, torch.t(b))
-                / (a.norm(dim=1).reshape(-1, 1) * b.norm(dim=1).reshape(1, -1))
-            )
-            # return sim, 1-sim
-            diff = 1 - sim
-            # sim[sim < 0] = 0
-            # diff[diff < 0] = 0
-            return sim, diff
-
-        elif dist_method == 'euclidean':
-            # Euclidean Distance
-            dist = torch.cdist(a, b, p=2)
-            sim = 1 / (1+dist)
-            sim = 2 * sim - 1  # This scaling line is important
-            sim = sim / sim.max()
-            return sim, dist
-       
-    
-    def binary_cross_entropy(self, preds, labels, pos_weight, norm):
+    @staticmethod
+    def binary_cross_entropy(preds, labels, pos_weight, norm):
         cost = norm * F.binary_cross_entropy_with_logits(
             preds, 
             labels, 
@@ -179,14 +97,21 @@ class LossFunctionsv2:
             reduction='mean')
         return cost    
     
-    def spatial_loss(self, z, sp_dists):
+    @staticmethod
+    def spatial_loss(z, sp_dists):
+        """
+        Pushes the closeness between embeddings to 
+        not only reflect the expression similarity 
+        but also their spatial proximity
+        """
         z_dists = torch.cdist(z, z, p=2)
         z_dists = torch.div(z_dists, torch.max(z_dists))
         n_items = z.size(dim=0) * z.size(dim=0)
-        p = torch.div(torch.sum(torch.mul(1.0 - z_dists.cuda(), sp_dists.cuda())), n_items).cuda()
-        return p 
+        sp_loss = torch.div(torch.sum(torch.mul(1.0 - z_dists, sp_dists)), n_items)
+        return sp_loss 
         
-    def alignment_loss(self, emb1, emb2, P):
+    @staticmethod
+    def alignment_loss(emb1, emb2, P):
         """
         Incentivizes the low-dimensional embeddings for each modality
         to be on the same latent space.
@@ -194,29 +119,37 @@ class LossFunctionsv2:
         P_sum = P.sum(axis=1)
         P_sum[P_sum==0] = 1
         P = P / P_sum[:, None]
-        csim, cdiff = self.compute_distance(emb1, emb2)
+        _, cdiff = compute_distance(emb1, emb2)
         weighted_P_cdiff = cdiff * P
         alignment_loss = weighted_P_cdiff.absolute().sum() / P.absolute().sum()
         return alignment_loss
 
-        
-    def sigma_loss(self, sigma):
+    @staticmethod
+    def sigma_loss(sigma):
         sig_norm = sigma / sigma.sum()
         sigma_loss = (sig_norm - .5).square().mean()
         return sigma_loss
     
-
-    def mean_sq_error(self, reconstructed, data):
+    @staticmethod
+    def mean_sq_error(reconstructed, data):
+        """Controls the ability of the latent space to encode information."""
         reconstruction_loss = (reconstructed - data).square().mean(axis=1).mean(axis=0)
         return reconstruction_loss
     
-    def cross_loss(self, comb1, comb2, F):
-        comsim1, comdiff1 = self.compute_distance(comb1, comb2)
-        cross_loss = comdiff1 * F
-        cross_loss = cross_loss.sum() / prod(F.shape)
+    @staticmethod
+    def cross_loss(comb1, comb2, W):
+        _, comdiff1 = compute_distance(comb1, comb2)
+        cross_loss = comdiff1 * W
+        cross_loss = cross_loss.sum() / prod(W.shape)
         return cross_loss
 
-    def kl(self, epoch, epochs, mu, logvar):
+    @staticmethod
+    def kl(epoch, epochs, mu, logvar):
+        """
+        Controls the smoothness of the latent space.
+        The KL divergence measures the amount of information lost 
+        when using Q to approximate P.
+        """
         kl_loss =  -.5 * torch.mean(
                         1
                         + logvar
@@ -227,185 +160,81 @@ class LossFunctionsv2:
         
         c = epochs / 2  # Midpoint
         kl_anneal = 1 / ( 1 + np.exp( - 5 * (epoch - c) / c ) )
-        kl_loss = 32 * 1e-3 * kl_anneal * kl_loss
+        kl_loss = 1e-3 * kl_anneal * kl_loss
         
         return kl_loss
     
-    def f_recons(self, comb1, comb2):
-        corF = torch.eye(comb1.shape[0], comb2.shape[0]).float().cuda()
+    @staticmethod
+    def f_recons(comb1, comb2):
+        corF = torch.eye(comb1.shape[0], comb2.shape[0]).float()
         F_est = torch.square(
                     comb1 - torch.mm(corF, comb2)
                 ).mean(axis=1).mean(axis=0)
         
         return F_est
     
-    def cosine_loss(self, emb1, emb2, comb1, comb2):
-        # Cosine Loss
-        cosim0, codiff0 = self.compute_distance(emb1, comb1)
-        cosim1, codiff1 = self.compute_distance(emb2, comb2)
+    @staticmethod
+    def cosine_loss(emb1, emb2, comb1, comb2):
+        """Controls the cosine similarity between cross modality embeddings."""
+        _, codiff0 = compute_distance(emb1, comb1)
+        _, codiff1 = compute_distance(emb2, comb2)
         
         cosine_loss = (
             torch.diag(codiff0.square()).mean(axis=0) / emb1.shape[1]
             + torch.diag(codiff1.square()).mean(axis=0) / emb2.shape[1])
         
-        return 32 * cosine_loss
+        return cosine_loss
 
 
-class Lossv2(LossFunctionsv2):
+
+class Annealer:
+    def __init__(self, max_epochs):
+        self.max_epochs = max_epochs
+        
+    def __call__(self, epoch, beta) -> Any:
+        c = self.max_epochs / 2 
+        kl_anneal = 1 / ( 1 + np.exp( - beta * (epoch - c) / c ) )
+        kl_loss = 1e-3 * kl_anneal * kl_loss
+
+
+
+
+class Loss:
     
-        
-    def __init__(self):
-        self.history = Namespace()
-        self.history.kl_gex = []
-        self.history.kl_pex = []
-        self.history.recons_gex = []
-        self.history.recons_pex = []
-        self.history.cosine = []
-        self.history.cons = []
-        self.history.spatial = []
-        self.history.adj = [] 
-        self.history.align = [] 
-        
+    _base_alpha = 1e-3
+    
+    def __init__(self, max_epochs):
+        self.max_epochs = max_epochs        
         self.alpha = {
-            'kl_gex': 1,
-            'kl_pex': 1,
-            'recons_gex': 1,
-            'recons_pex': 1,
-            'cosine': 1,
-            'consistency': 1,
-            'adj': 1,
-            'spatial': 1,
-            'alignment': 1
+            'kl_gex': self._base_alpha,
+            'kl_pex': self._base_alpha,
+            'recons_gex': self._base_alpha,
+            'recons_pex': self._base_alpha,
+            'cosine': self._base_alpha,
+            'consistency': self._base_alpha,
+            'adj': self._base_alpha,
+            'spatial': self._base_alpha,
+            'alignment': self._base_alpha,
+            'sigma': self._base_alpha
         }
-                  
 
-    def _update_means(self):
-        self.mean_kl_gex = np.mean(self.history.kl_gex)
-        self.mean_kl_pex = np.mean(self.history.kl_pex)
-        self.mean_recons_gex = np.mean(self.history.recons_gex)
-        self.mean_recons_pex = np.mean(self.history.recons_pex)
-        self.mean_cosine = np.mean(self.history.cosine)
-        self.mean_spatial = np.mean(self.history.spatial)
-        self.mean_adj = np.mean(self.history.adj)
-        self.mean_align = np.mean(self.history.align)
 
+    def __call__(self, epoch, varz):
+        return self.compute(epoch, varz)
     
-    def compute(self, epoch, varz):
-        
-        kl_loss_gex = self.alpha['kl_gex'] * self.kl(epoch, varz.epochs, varz.gex_mu, varz.gex_logvar)
-        kl_loss_pex = self.alpha['kl_pex'] * self.kl(epoch, varz.epochs, varz.pex_mu, varz.pex_logvar)
-        # self.history.kl_gex.append(float(kl_loss_gex))
-        # self.history.kl_pex.append(float(kl_loss_pex))
-        
-        recons_loss_gex = self.alpha['recons_gex'] * self.mean_sq_error(varz.gex_recons, varz.gex_features_pca)
-        recons_loss_pex = self.alpha['recons_pex'] * self.mean_sq_error(varz.pex_recons, varz.pex_features_pca)
-        # self.history.recons_gex.append(float(recons_loss_gex))
-        # self.history.recons_pex.append(float(recons_loss_pex))
-        
-        cosine_loss = self.alpha['cosine'] * self.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
-        # self.history.cosine.append(float(cosine_loss))
-        
-        consistency_loss = self.alpha['consistency'] * self.f_recons(varz.gex_c, varz.pex_c)
-        # self.history.cons.append(float(consistency_loss))
-        
-        adj_loss = self.alpha['adj'] * self.binary_cross_entropy(
-            varz.adj_recon, varz.adj_label, 
-            varz.pos_weight, varz.norm)
-        # self.history.adj.append(float(adj_loss))
-        
-        spatial_loss = self.alpha['spatial'] * self.spatial_loss(varz.gex_z, varz.gex_sp_dist)
-        # self.history.spatial.append(float(spatial_loss))
-        
-        alignment_loss = self.alpha['alignment'] * self.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
-        # self.history.align.append(float(alignment_loss))
-        
-        return (
-            kl_loss_gex, kl_loss_pex, 
-            recons_loss_gex, recons_loss_pex, 
-            cosine_loss, consistency_loss, 
-            adj_loss, spatial_loss, alignment_loss
-        )        
-        
-        # self._update_means()
-        
-        # return kl_loss_gex + \
-        #     kl_loss_pex +  \
-        #     recons_loss_gex + \
-        #     recons_loss_pex + \
-        #     cosine_loss + \
-        #     consistency_loss + adj_loss + spatial_loss
-    
-    
-    
-
-class Loss(LossFunctionsv2):
-    
-    gex = Namespace()
-    pex = Namespace()
-    gex.kl = []
-    pex.kl = []
-    gex.recons = []
-    pex.recos = []
-    cosine = []
-    f_est = []
-    
-    def __init__(self, alpha=1):
-        self.alpha = alpha
-    
-    def compute(self, 
-                epoch, 
-                varz, 
-                # sigma
-            ):
-        
-        kl_loss_gex = self.kl(epoch, varz.epochs, varz.gex_mu, varz.gex_logvar)
-        kl_loss_pex = self.kl(epoch, varz.epochs, varz.pex_mu, varz.pex_logvar)
-        
-        self.gex.kl.append(float(kl_loss_gex))
-        self.pex.kl.append(float(kl_loss_pex))
-        
-        recons_loss_gex = self.mean_sq_error(varz.gex_recons, varz.gex_features_pca)
-        recons_loss_pex = self.mean_sq_error(varz.pex_recons, varz.pex_features_pca)
-        
-        self.gex.recons.append(float(recons_loss_gex))
-        self.pex.recos.append(float(recons_loss_pex))
-        
-        cosine_loss = self.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
-        F_est = self.f_recons(varz.gex_c, varz.pex_c)
-        
-        self.cosine.append(float(cosine_loss))
-        self.f_est.append(float(F_est))
-        
-        # sigma_loss = self.sigma_loss(sigma)
-        
-        return self.alpha * (kl_loss_gex + \
-            kl_loss_pex +  \
-            recons_loss_gex + \
-            recons_loss_pex + \
-            cosine_loss + \
-            F_est)
-            # sigma_loss
-    
-    
-    
-    
-class LossKZCP(LossFunctions):
-    """
-    Computes 
-        - KL, 
-        - ZINB, 
-        - CE, 
-        - SP
-    """
-    def compute(self, varz, kl_weight=1.0, recon_weight=1.0, adj_weight=1.0, sp_weight=1.0):        
-        loss_kl = self.KL(varz.mu, varz.logvar, varz.train_nodes_idx) ## latent dist vs prior
-        loss_x = self.ZINB(varz.features_recon, varz.feature, varz.train_nodes_idx, varz.features_raw) ## gene reconstruction 
-        loss_a = self.CE(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm, varz.train_nodes_idx) ## adj reconstruction
-        loss_p = self.SP(varz.z, varz.sp_dists)
-        
-        loss = kl_weight*loss_kl + recon_weight*loss_x + adj_weight*loss_a + sp_weight*loss_p
-        self.loss.append(float(loss))
-        
-        return loss
-
+    def compute(self, epoch, varz) -> Namespace:
+        ledger = Namespace()
+        a = self.alpha
+        ledger.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
+        ledger.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
+        ledger.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
+        ledger.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
+        ledger.cosine_loss = a['cosine'] * LossFunctions.cosine_loss(varz.gex_z, varz.pex_z, varz.gex_c, varz.pex_c)
+        ledger.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
+        ledger.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
+        ledger.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.gex_sp_dist)
+        ledger.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
+        ledger.sigma_loss = a['sigma'] * LossFunctions.sigma_loss(varz.sigma)
+                
+        return ledger
     

@@ -10,6 +10,11 @@ import scipy.sparse as sp
 from anndata import AnnData
 import networkx as nx
 from scipy.sparse import csr_matrix
+import math
+from scipy.stats import spearmanr
+
+def euclidean_distance(p1, p2):
+    return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor.
@@ -60,15 +65,6 @@ def clr_normalize_each_cell(adata: AnnData, inplace: bool = False):
     
     return adata
 
-def plotA(coord,adj):
-    g=nx.from_numpy_matrix(adj)
-    pos={}
-    for n in range(coord.shape[0]):
-        pos[n]=(coord[n][0],coord[n][1])
-    fig, ax = plt.subplots(dpi=200)
-    nx.draw(g, pos, node_size=6, width=0.5)
-    plt.show()
-
     
 def mask_nodes_edges(nNodes,testNodeSize=0.1,valNodeSize=0.05,seed=3):
     # randomly select nodes; mask all corresponding rows and columns in loss functions
@@ -83,19 +79,36 @@ def mask_nodes_edges(nNodes,testNodeSize=0.1,valNodeSize=0.05,seed=3):
     
     return torch.tensor(train_nodes_idx),torch.tensor(val_nodes_idx),torch.tensor(test_nodes_idx)
 
+def train_test_split(adata):
+    adata.obs['idx'] = list(range(0, len(adata)))
+    xy = adata.obsm['spatial']
+    x = xy[:, 0]
+    y = xy[:, 1]
+    xmin, ymin = adata.obsm['spatial'].min(0)
+    xmax, ymax = adata.obsm['spatial'].max(0)
+    x_segments = np.linspace(xmin, xmax, 4)
+    y_segments = np.linspace(ymin, ymax, 4)
+    category = np.zeros_like(x, dtype=int)
+    for i, (xi, yi) in enumerate(zip(x, y)):
+        for j, (xmin_j, xmax_j) in enumerate(zip(x_segments[:-1], x_segments[1:])):
+            if xmin_j <= xi <= xmax_j:
+                for k, (ymin_k, ymax_k) in enumerate(zip(y_segments[:-1], y_segments[1:])):
+                    if ymin_k <= yi <= ymax_k:
+                        category[i] = 3*k + j
+                        break
+                break
+    adata.obs['train_test'] = category
+    adata.obs['train_test'] = adata.obs['train_test'].astype('category')
 
-def featurize(input_adata, pca_dim=2048, clr=False):
+def featurize(input_adata, clr=False):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     varz = Namespace()
     features = input_adata.copy()
+    train_test_split(features)
     features.X = csr_matrix(features.X)
     features.X = features.X.toarray()
     features_raw = torch.tensor(features.X)
-    # pca_dim = min(features_raw.shape[1], pca_dim)
-    # pca_dim = min(pca_dim, features_raw.shape[0])
-    
-    # varz.pca = PCA(n_components=pca_dim).fit(features_raw)
-    # varz.features_pca = torch.tensor(varz.pca.fit_transform(features_raw)).float().cuda()
-    
+
     if clr:
         features = clr_normalize_each_cell(features)
     
@@ -106,22 +119,20 @@ def featurize(input_adata, pca_dim=2048, clr=False):
 
     adj = getA_knn(features.obsm['spatial'], 7)
     adj_label = adj + sp.eye(adj.shape[0])
-    adj_label = torch.tensor(adj_label.toarray()).cuda()
-    pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()).cuda()
+    adj_label = torch.tensor(adj_label.toarray()).to(device)
+    pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()).to(device)
     norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
-    adj_norm = preprocess_graph(adj).cuda()
+    adj_norm = preprocess_graph(adj).to(device)
 
-    feature = feature.float().cuda()
-    adj_norm = adj_norm.float().cuda()
+    feature = feature.float().to(device)
+    adj_norm = adj_norm.float().to(device)
     maskedgeres= mask_nodes_edges(features.shape[0], testNodeSize=0, valNodeSize=0.1)
     varz.train_nodes_idx, varz.val_nodes_idx, varz.test_nodes_idx = maskedgeres
-    features_raw = features_raw.cuda()
+    features_raw = features_raw.to(device)
 
     coords = torch.tensor(features.obsm['spatial']).float()
     sp_dists = torch.cdist(coords, coords, p=2)
-    varz.sp_dists = torch.div(sp_dists, torch.max(sp_dists)).cuda()
-    
-
+    varz.sp_dists = torch.div(sp_dists, torch.max(sp_dists)).to(device)
     
     varz.features = feature
     varz.sp_dists = sp_dists
@@ -130,6 +141,7 @@ def featurize(input_adata, pca_dim=2048, clr=False):
     varz.norm = norm
     varz.pos_weight = pos_weight
     varz.adj_label = adj_label
+    varz.device = device
     
     return varz
 
@@ -137,3 +149,10 @@ def update_vars(v1, v2):
     v1 = vars(v1)
     v1.update(vars(v2))
     return Namespace(**v1)
+
+
+def feature_corr(preds, targets):
+    assert preds.shape == targets.shape
+    return [spearmanr(targets[:, i], preds[:, i]).statistic \
+                for i in range(targets.shape[1])]
+    
