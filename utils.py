@@ -12,6 +12,7 @@ import networkx as nx
 from scipy.sparse import csr_matrix
 import math
 from scipy.stats import spearmanr
+from sklearn.metrics import roc_auc_score, f1_score
 
 def euclidean_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
@@ -98,7 +99,7 @@ def train_test_split(adata):
     adata.obs['train_test'] = category
     adata.obs['train_test'] = adata.obs['train_test'].astype('category')
 
-def featurize(input_adata, clr=False):
+def featurize(input_adata, neighbors=20, clr=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     varz = Namespace()
     features = input_adata.copy()
@@ -115,7 +116,7 @@ def featurize(input_adata, clr=False):
     featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))
     feature = torch.tensor(featurelog)
 
-    adj = getA_knn(features.obsm['spatial'], 7)
+    adj = getA_knn(features.obsm['spatial'], neighbors)
     adj_label = adj + sp.eye(adj.shape[0])
     adj_label = torch.tensor(adj_label.toarray()).to(device)
     pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()).to(device)
@@ -130,10 +131,9 @@ def featurize(input_adata, clr=False):
 
     coords = torch.tensor(features.obsm['spatial']).float()
     sp_dists = torch.cdist(coords, coords, p=2)
-    varz.sp_dists = torch.div(sp_dists, torch.max(sp_dists)).to(device)
     
+    varz.sp_dists = torch.div(sp_dists, torch.max(sp_dists)).to(device)
     varz.features = feature
-    varz.sp_dists = sp_dists
     varz.features_raw = features_raw
     varz.adj_norm = adj_norm
     varz.norm = norm
@@ -155,8 +155,18 @@ def feature_corr(preds, targets):
                 for i in range(targets.shape[1])]
     
 
-from sklearn.metrics import roc_auc_score
 
 def adj_auc(adj, adj_predicted) -> float:
     return roc_auc_score(adj.flatten(), adj_predicted.flatten())
     
+    
+def adj_f1(adj, adj_predicted) -> float:
+    return f1_score(adj.flatten(), adj_predicted.flatten())
+
+
+from sklearn.metrics import precision_score, recall_score
+
+def calculate_precision_recall(adj, adj_predicted):
+    precision = precision_score(adj.flatten(), adj_predicted.flatten())
+    recall = recall_score(adj.flatten(), adj_predicted.flatten())
+    return precision, recall

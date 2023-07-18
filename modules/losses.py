@@ -1,13 +1,10 @@
 from argparse import Namespace
-from typing import Any, Tuple
-from matplotlib import pyplot as plt
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
 import numpy as np
 from math import prod
-from torchmetrics.aggregation import MeanMetric
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def compute_distance(a, b, dist_method='euclidean'):
     if dist_method == 'cosine':
@@ -29,7 +26,7 @@ def compute_distance(a, b, dist_method='euclidean'):
 
 _f = lambda x: float(x)
 class Metrics:
-    def __init__(self, track=False, alpha=1.0):
+    def __init__(self, track=False):
         self.track = track
         self.means = Namespace()
         self.counters = {}
@@ -39,10 +36,10 @@ class Metrics:
     def __str__(self) -> str:
         str_repr = ''
         for k, v in self.means.__dict__.items():
-            str_repr+=f'{k}: {v:.3f}'
+            str_repr+=f'{k}: {v:.3e}'
             str_repr+=' | '
             
-        str_repr+=f'loss: {np.mean(self.losses):.3f}'
+        str_repr+=f'loss: {np.mean(self.losses):.3e}'
         return str_repr
     
     def __repr__(self) -> str:
@@ -58,19 +55,21 @@ class Metrics:
     def update(self, ledger):
         loss = 0
         _means = self.means.__dict__
+        _values = self.values.__dict__
+        
         for name, value in ledger.__dict__.items(): 
             loss += value
             if name not in _means:
                 _means[name] = _f(value)
                 self.counters[name] = 0
                 if self.track:
-                    _means[name] = [_f(value)]
+                    _values[name] = [_f(value)]
             else:
-                _means[name] = _f(
-                    (_means[name]*self.counters[name]) + value
-                )
+                _means[name] = (_f(
+                    (_means[name]*self.counters[name]) + _f(value)
+                )) / (self.counters[name] + 1)
                 if self.track:
-                    _means[name].append(_f(value))
+                    _values[name].append(_f(value))
             self.counters[name] += 1
         self.losses.append(_f(loss))
         
@@ -115,7 +114,7 @@ class LossFunctions:
     @staticmethod
     def alignment_loss(emb1, emb2, P):
         """
-        Incentivizes the low-dimensional embeddings for each modality
+        Pushes the embeddings for each modality 
         to be on the same latent space.
         """
         P_sum = P.sum(axis=1)
@@ -127,7 +126,9 @@ class LossFunctions:
         return alignment_loss
 
     @staticmethod
-    def sigma_loss(sigma):
+    def balance_loss(sigma):
+        """Balances the contribution of each modality 
+        in shaping the shared latent space."""
         sig_norm = sigma / sigma.sum()
         sigma_loss = (sig_norm - .5).square().mean()
         return sigma_loss
@@ -168,7 +169,7 @@ class LossFunctions:
     
     @staticmethod
     def f_recons(comb1, comb2):
-        corF = torch.eye(comb1.shape[0], comb2.shape[0]).float()
+        corF = torch.eye(comb1.shape[0], comb2.shape[0]).to(device)
         F_est = torch.square(
                     comb1 - torch.mm(corF, comb2)
                 ).mean(axis=1).mean(axis=0)
@@ -196,14 +197,14 @@ class LossFunctions:
 
 
 
-class Annealer:
-    def __init__(self, max_epochs):
-        self.max_epochs = max_epochs
+# class Annealer:
+#     def __init__(self, max_epochs):
+#         self.max_epochs = max_epochs
         
-    def __call__(self, epoch, beta) -> Any:
-        c = self.max_epochs / 2 
-        kl_anneal = 1 / ( 1 + np.exp( - beta * (epoch - c) / c ) )
-        kl_loss = 1e-3 * kl_anneal * kl_loss
+#     def __call__(self, epoch, beta):
+#         c = self.max_epochs / 2 
+#         kl_anneal = 1 / ( 1 + np.exp( - beta * (epoch - c) / c ) )
+#         kl_loss = 1e-3 * kl_anneal * kl_loss
 
 
 
@@ -225,7 +226,8 @@ class Loss:
             'adj': self._base_alpha,
             'spatial': self._base_alpha,
             'alignment': self._base_alpha,
-            'sigma': self._base_alpha
+            'balance': self._base_alpha,
+            'cross': self._base_alpha
         }
 
 
@@ -245,7 +247,8 @@ class Loss:
         ledger.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
         ledger.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
         ledger.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
-        ledger.sigma_loss = a['sigma'] * LossFunctions.sigma_loss(varz.sigma)
+        ledger.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
+        ledger.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
                 
         return ledger
     

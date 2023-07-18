@@ -1,14 +1,12 @@
 from argparse import Namespace
-from typing import Tuple
-from sklearn.decomposition import PCA
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import FloatTensor, LongTensor
 from modules.graph import GraphConvolution
 from modules.inner_product import InnerProductDecoder
-from modules.linear import LinearBlock
 import numpy as np
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class JointVAE(nn.Module):
     def __init__(
@@ -66,29 +64,39 @@ class JointVAE(nn.Module):
                     act=F.leaky_relu
             )
         ])
-
-        self.decoders = []
-        for i in range(self.num_modalities):
-            self.decoders.append(nn.Sequential(
-                nn.Linear(latent_dim, input_dim[i]),
-                nn.BatchNorm1d(input_dim[i]),
+        
+        dim1, dim2 = input_dim
+        self.decoders = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(latent_dim, dim1),
+                nn.BatchNorm1d(dim1),
                 nn.LeakyReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(input_dim[i], 2*input_dim[i]),
-                nn.BatchNorm1d(2*input_dim[i]),
+                nn.Linear(dim1, 2*dim1),
+                nn.BatchNorm1d(2*dim1),
                 nn.LeakyReLU(),
                 nn.Dropout(dropout),
-                nn.Linear(2*input_dim[i], input_dim[i]),
-            ))
-        self.decoders = nn.ModuleList(self.decoders)
+                nn.Linear(2*dim1, dim1),
+            ), 
+            nn.Sequential(
+                nn.Linear(latent_dim, dim2),
+                nn.BatchNorm1d(dim2),
+                nn.LeakyReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(dim2, 2*dim2),
+                nn.BatchNorm1d(2*dim2),
+                nn.LeakyReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(2*dim2, dim2),
+            )
+        ])
         
         self.adjacency = InnerProductDecoder(
             dropout=dropout, 
             act=lambda x: x)
 
-        ## A value δ < 1 implies that modality 0 is weighted more than modality 1 during aggregation, 
-        ## while δ > 1 implies the opposite. 
-        self.sigma = nn.Parameter(torch.rand(self.num_modalities))
+        ##  ω < 1 implies that modality 0 is weighted more
+        self.omega = nn.Parameter(torch.rand(2))
 
     def encode(self, X, A):
         return [self.encoders[i](X[i], A) for i in range(self.num_modalities)]
@@ -118,13 +126,13 @@ class JointVAE(nn.Module):
         
         return [
             (
-                self.sigma[i] * Z[i]
-                + self.sigma[(i + 1) % 2] * torch.mm(
+                self.omega[i] * Z[i]
+                + self.omega[(i + 1) % 2] * torch.mm(
                     corr if i == 0 else torch.t(corr),
                     Z[(i + 1) % 2])
             ) / (
-                self.sigma[i]
-                + self.sigma[(i + 1) % 2] * corr.sum((i + 1) % 2).reshape(-1, 1)
+                self.omega[i]
+                + self.omega[(i + 1) % 2] * corr.sum((i + 1) % 2).reshape(-1, 1)
             )
             for i in range(self.num_modalities)
         ]
@@ -134,14 +142,14 @@ class JointVAE(nn.Module):
 
     def forward(self, X, A):
         output = Namespace()
-        corr = torch.eye(X[0].shape[0], X[1].shape[0])
+        corr = torch.eye(X[0].shape[0], X[1].shape[0]).to(device)
         
         encoded = self.encode(X, A)
         zs, mus, logvars = self.refactor(encoded, A)
         combined = self.combine(zs, corr)
         X_hat = self.decode(combined)
         output.adj_recon = self.adjacency(combined[0])      
-        output.sigma = self.sigma  
+        output.omega = self.omega  
 
         output.gex_z, output.pex_z = zs
         output.gex_mu, output.pex_mu = mus
