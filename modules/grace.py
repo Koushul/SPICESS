@@ -28,7 +28,7 @@ class Encoder(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, activation, base_model=GCNConv, k: int = 2):
         super(Encoder, self).__init__()
         self.base_model = base_model
-
+        self.in_channels = in_channels
         assert k >= 2
         self.k = k
         self.conv = [base_model(in_channels, 2 * out_channels)]
@@ -46,13 +46,13 @@ class Encoder(torch.nn.Module):
 
 
 class Model(torch.nn.Module):
-    def __init__(self, encoder: Encoder, num_hidden: int, num_proj_hidden: int, tau: float = 0.5):
+    def __init__(self, encoder: Encoder, num_hidden: int, latent_dim: int, tau: float = 0.5):
         super(Model, self).__init__()
         self.encoder: Encoder = encoder
         self.tau: float = tau
-
-        self.fc1 = torch.nn.Linear(num_hidden, num_proj_hidden)
-        self.fc2 = torch.nn.Linear(num_proj_hidden, num_hidden)
+        self.latent_dim: int = latent_dim
+        self.fc1 = torch.nn.Linear(num_hidden, latent_dim)
+        self.fc2 = torch.nn.Linear(latent_dim, num_hidden)
 
     def forward(self, x: torch.Tensor,
                 edge_index: torch.Tensor) -> torch.Tensor:
@@ -112,6 +112,10 @@ class Model(torch.nn.Module):
         ret = ret.mean() if mean else ret.sum()
 
         return ret
+    
+    def __repr__(self) -> str:
+        return self.__class__.__name__ + ' (' + str(self.encoder.in_channels) + ' -> ' + str(self.latent_dim) + ')'
+        
 
 
 def drop_feature(x, drop_prob):

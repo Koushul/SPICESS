@@ -6,7 +6,7 @@ from math import prod
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def compute_distance(a, b, dist_method='euclidean'):
+def compute_distance(a, b, dist_method='cosine'):
     if dist_method == 'cosine':
         # Cosine Similarity
         sim = (
@@ -23,6 +23,12 @@ def compute_distance(a, b, dist_method='euclidean'):
         sim = 2 * sim - 1  # This scaling line is important
         sim = sim / sim.max()
         return sim, dist
+
+# def sim(z1: torch.Tensor, z2: torch.Tensor):
+#     z1 = F.normalize(z1)
+#     z2 = F.normalize(z2)
+#     return torch.mm(z1, z2.t())
+
 
 _f = lambda x: float(x)
 class Metrics:
@@ -176,23 +182,21 @@ class LossFunctions:
         
         return F_est
     
-    # @staticmethod
-    # def cosine_loss(emb1, emb2, comb1, comb2):
-    #     """Controls the cosine similarity between cross modality embeddings."""
-    #     _, codiff0 = compute_distance(emb1, comb1)
-    #     _, codiff1 = compute_distance(emb2, comb2)
-        
-    #     cosine_loss = (
-    #         torch.diag(codiff0.square()).mean(axis=0) / emb1.shape[1]
-    #         + torch.diag(codiff1.square()).mean(axis=0) / emb2.shape[1])
-        
-    #     return cosine_loss
-    
     @staticmethod
     def cosine_loss(emb, comb):
         _, codiff = compute_distance(emb, comb)
         cosine_loss = torch.diag(codiff.square()).mean(axis=0) / emb.shape[1]
         return cosine_loss
+    
+    @staticmethod
+    def semi_loss(z1: torch.Tensor, z2: torch.Tensor, tau: float = 0.5):
+        fexp = lambda x: torch.exp(x / tau)
+        refl_sim = fexp(compute_distance(z1, z1))
+        between_sim = fexp(compute_distance(z1, z2))
+
+        return -torch.log(
+            between_sim.diag()
+            / (refl_sim.sum(1) + between_sim.sum(1) - refl_sim.diag()))
 
 
 
@@ -216,9 +220,7 @@ class Loss:
     def __init__(self, max_epochs):
         self.max_epochs = max_epochs        
         self.alpha = {
-            'kl_gex': self._base_alpha,
             'kl_pex': self._base_alpha,
-            'recons_gex': self._base_alpha,
             'recons_pex': self._base_alpha,
             'cosine_gex': self._base_alpha,
             'cosine_pex': self._base_alpha,
@@ -227,19 +229,36 @@ class Loss:
             'spatial': self._base_alpha,
             'alignment': self._base_alpha,
             'balance': self._base_alpha,
-            'cross': self._base_alpha
+            'cross': self._base_alpha,
+            'semi': self._base_alpha
         }
 
 
     def __call__(self, epoch, varz):
         return self.compute(epoch, varz)
     
+    # def compute(self, epoch, varz) -> Namespace:
+    #     ledger = Namespace()
+    #     a = self.alpha
+    #     ledger.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
+    #     ledger.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
+    #     ledger.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
+    #     ledger.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
+    #     ledger.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
+    #     ledger.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
+    #     ledger.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
+    #     ledger.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
+    #     ledger.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
+    #     ledger.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
+    #     ledger.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
+    #     ledger.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
+                
+    #     return ledger
+    
     def compute(self, epoch, varz) -> Namespace:
         ledger = Namespace()
         a = self.alpha
-        ledger.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
         ledger.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
-        ledger.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
         ledger.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
         ledger.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
         ledger.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
@@ -249,6 +268,7 @@ class Loss:
         ledger.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
         ledger.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
         ledger.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
+        ledger.semi_loss = a['semi'] * LossFunctions.semi_loss(varz.z1, varz.z2)
                 
         return ledger
     

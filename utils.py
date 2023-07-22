@@ -170,3 +170,5 @@ def calculate_precision_recall(adj, adj_predicted):
     precision = precision_score(adj.flatten(), adj_predicted.flatten())
     recall = recall_score(adj.flatten(), adj_predicted.flatten())
     return precision, recall
+
+

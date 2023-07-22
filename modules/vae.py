@@ -6,122 +6,85 @@ from modules.graph import GraphConvolution
 from modules.inner_product import InnerProductDecoder
 import numpy as np
 
+from modules.linear import LinearBlock
+from torch_geometric.nn import GCNConv
+from torch_geometric.utils import dropout_adj
+from modules.grace import Encoder, Model, drop_feature
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class JointVAE(nn.Module):
     def __init__(
         self,
-        input_dim,
+        num_genes,
+        num_proteins,
         dropout=0,
         encoder_dim = 64,
         latent_dim=32,
+        num_layers = 2,
+        tau = 0.5
     ):
         super().__init__()
 
         self.num_modalities = 2
+        num_hidden = 128
+        activation = F.leaky_relu
         
-        self.encoders = nn.ModuleList([
-            GraphConvolution(
-                input_dim=input_dim[0], 
+        gcn = Encoder(
+            num_genes, 
+            latent_dim, 
+            activation, 
+            base_model=GCNConv, 
+            k=num_layers).to(device)
+                
+        self.gex_encoder = Model(
+                encoder=gcn, 
+                num_hidden=latent_dim, 
+                latent_dim=latent_dim, 
+                tau=tau
+            )
+        
+        self.pex_encoder = LinearBlock(
+                input_dim=num_proteins, 
                 output_dim=encoder_dim, 
                 dropout=dropout, 
-                act=F.leaky_relu
-            ),
-            GraphConvolution(
-                input_dim=input_dim[1], 
-                output_dim=encoder_dim, 
-                dropout=dropout, 
-                act=F.leaky_relu
             )
-        ])
 
-        self.fc_mus = nn.ModuleList([
-            GraphConvolution(
-                input_dim=encoder_dim, 
-                output_dim=latent_dim, 
-                dropout=dropout, 
-                act=F.leaky_relu
-            ),
-            GraphConvolution(
-                input_dim=encoder_dim, 
-                output_dim=latent_dim, 
-                dropout=dropout, 
-                act=F.leaky_relu
-            )
-        ])
+        self.mean = LinearBlock(
+            input_dim=encoder_dim, 
+            output_dim=latent_dim, 
+            dropout=dropout, 
+        )
 
-        self.fc_vars = nn.ModuleList([
-            GraphConvolution(
-                    input_dim=encoder_dim, 
-                    output_dim=latent_dim, 
-                    dropout=dropout, 
-                    act=F.leaky_relu
-            ),
-            GraphConvolution(
-                    input_dim=encoder_dim, 
-                    output_dim=latent_dim, 
-                    dropout=dropout, 
-                    act=F.leaky_relu
-            )
-        ])
+        self.var = LinearBlock(
+            input_dim=encoder_dim, 
+            output_dim=latent_dim, 
+            dropout=dropout, 
+        )
         
-        dim1, dim2 = input_dim
-        self.decoders = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(latent_dim, dim1),
-                nn.BatchNorm1d(dim1),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(dim1, 2*dim1),
-                nn.BatchNorm1d(2*dim1),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(2*dim1, dim1),
-            ), 
-            nn.Sequential(
-                nn.Linear(latent_dim, dim2),
-                nn.BatchNorm1d(dim2),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(dim2, 2*dim2),
-                nn.BatchNorm1d(2*dim2),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(2*dim2, dim2),
-            )
-        ])
+        self.pex_decoder = LinearBlock(latent_dim, num_proteins, num_proteins)
         
         self.adjacency = InnerProductDecoder(
             dropout=dropout, 
-            act=lambda x: x)
+            act=lambda x: x,
+            latent_dim=latent_dim)
 
         ##  ω < 1 implies that modality 0 is weighted more
         self.omega = nn.Parameter(torch.rand(2))
 
-    def _encode_gex(self, X, A):
-        return self.encoders[0](X, A)
     
-    def _encode_pex(self, X, A):
-        return self.encoders[1](X, A)
+    def refactor(self, X):
+        mu = self.mean(X)
+        logvar = self.var(X)
+        std = torch.exp(logvar / 2)
+        if not self.training:
+            z = mu
+        else:
+            std = std + 1e-7
+            q = torch.distributions.Normal(mu, std)
+            z = q.rsample()
 
-    def encode(self, X, A):
-        return self._encode_gex(X[0], A), self._encode_pex(X[1], A)
-
-    def refactor(self, X, A):
-        zs = []; mus = []; logvars = []
-        for x, i in zip(X, range(2)):
-            mu = self.fc_mus[i](x, A)
-            logvar = self.fc_vars[i](x, A)
-            std = torch.exp(logvar / 2)
-            if not self.training:
-                zs.append(mu)
-            else:
-                std = std + 1e-7
-                q = torch.distributions.Normal(mu, std)
-                zs.append(q.rsample())
-            mus.append(mu)
-            logvars.append(logvar)
-        return zs, mus, logvars
+        return z, mu, logvar
 
     def combine(self, Z, corr):
         """This moves correspondent latent embeddings 
@@ -141,37 +104,56 @@ class JointVAE(nn.Module):
             for i in range(self.num_modalities)
         ]
 
-    def decode(self, X):
-        return [self.decoders[i](X[i]) for i in range(self.num_modalities)]
 
-    def forward(self, gene_matrix, protein_matrix, adjacency_matrix):
+    def forward(self, 
+            gene_matrix, 
+            protein_matrix, 
+            adjacency_matrix, 
+            drop_edge_rate_1 = 0.4,
+            drop_edge_rate_2 = 0.5,
+            drop_feature_rate_1 = 0.3,
+            drop_feature_rate_2 = 0.2):
+        
         output = Namespace()
-        X = [gene_matrix, protein_matrix]
         A = adjacency_matrix
+        edge_index = adjacency_matrix.nonzero().t().contiguous()
         corr = torch.eye(gene_matrix.shape[0], protein_matrix.shape[0]).to(device)
         
-        encoded = self.encode(X, A)
-        zs, mus, logvars = self.refactor(encoded, A)
+        encoded_pex = self.pex_encoder(protein_matrix)
+        
+        edge_index_1 = dropout_adj(edge_index, p=drop_edge_rate_1)[0]
+        edge_index_2 = dropout_adj(edge_index, p=drop_edge_rate_2)[0]
+        x_1 = drop_feature(gene_matrix, drop_feature_rate_1)
+        x_2 = drop_feature(gene_matrix, drop_feature_rate_2)
+        
+        z1 = self.gex_encoder(x_1, edge_index_1)
+        z2 = self.gex_encoder(x_2, edge_index_2)
+        gex_z = self.gex_encoder(gene_matrix, edge_index)
+        pex_z, mu, logvar = self.refactor(encoded_pex)
+        print(gex_z.shape, pex_z.shape)
+        zs = [gex_z, pex_z]
         combined = self.combine(zs, corr)
-        X_hat = self.decode(combined)
+        pex_recons = self.pex_decoder(combined[0])
         output.adj_recon = self.adjacency(combined[0])      
         output.omega = self.omega  
 
+        output.z1, output.z2 = z1, z2
         output.gex_z, output.pex_z = zs
-        output.gex_mu, output.pex_mu = mus
-        output.gex_logvar, output.pex_logvar = logvars
+        output.pex_mu = mu
+        output.pex_logvar = logvar
         output.gex_c, output.pex_c = combined
-        output.gex_recons, output.pex_recons = X_hat
-        output.gex_input, output.pex_input = X
+        output.pex_recons = pex_recons
+        output.gex_input = gene_matrix
+        output.pex_input = protein_matrix
 
         return output
     
-    @torch.no_grad()
-    def swap_latent(self, source, adj, from_modality=0, to_modality=1):
-        self.eval()
-        encoded_source = self.encoders[from_modality](source, adj)
-        z = self.fc_mus[from_modality](encoded_source, adj)
-        decoded = self.decoders[to_modality](z)
-        return decoded.cpu().numpy()       
+    # @torch.no_grad()
+    # def swap_latent(self, gene_matrix, adj):
+    #     self.eval()
+    #     encoded_source = self.pex_encoder(gene_matrix, adj)
+    #     z = self.fc_mus[0](encoded_source, adj)
+    #     decoded = self.decoders[1](z)
+    #     return decoded.cpu().numpy()       
     
 
