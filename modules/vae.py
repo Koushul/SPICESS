@@ -98,14 +98,18 @@ class JointVAE(nn.Module):
         ##  ω < 1 implies that modality 0 is weighted more
         self.omega = nn.Parameter(torch.rand(2))
 
-    def encode(self, X, A):
-        return [self.encoders[i](X[i], A) for i in range(self.num_modalities)]
+    def _encode_gex(self, X, A):
+        return self.encoders[0](X, A)
+    
+    def _encode_pex(self, X, A):
+        return self.encoders[1](X, A)
 
-    def refactor(self, X, A, index=None):
-        if index is None:
-            index = range(self.num_modalities)
+    def encode(self, X, A):
+        return self._encode_gex(X[0], A), self._encode_pex(X[1], A)
+
+    def refactor(self, X, A):
         zs = []; mus = []; logvars = []
-        for x, i in zip(X, index):
+        for x, i in zip(X, range(2)):
             mu = self.fc_mus[i](x, A)
             logvar = self.fc_vars[i](x, A)
             std = torch.exp(logvar / 2)
@@ -140,9 +144,11 @@ class JointVAE(nn.Module):
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(self.num_modalities)]
 
-    def forward(self, X, A):
+    def forward(self, gene_matrix, protein_matrix, adjacency_matrix):
         output = Namespace()
-        corr = torch.eye(X[0].shape[0], X[1].shape[0]).to(device)
+        X = [gene_matrix, protein_matrix]
+        A = adjacency_matrix
+        corr = torch.eye(gene_matrix.shape[0], protein_matrix.shape[0]).to(device)
         
         encoded = self.encode(X, A)
         zs, mus, logvars = self.refactor(encoded, A)
