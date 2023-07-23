@@ -5,12 +5,11 @@ import torch.nn.functional as F
 from modules.graph import GraphConvolution
 from modules.inner_product import InnerProductDecoder
 import numpy as np
-
 from modules.linear import LinearBlock
 from torch_geometric.nn import GCNConv
 from torch_geometric.utils import dropout_adj
-from modules.grace import Encoder, Model, drop_feature
-
+from modules.grace import Encoder, GRACE, drop_feature
+from torch import Tensor as T
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class JointVAE(nn.Module):
@@ -18,37 +17,35 @@ class JointVAE(nn.Module):
         self,
         num_genes,
         num_proteins,
-        dropout=0,
+        dropout = 0,
         encoder_dim = 64,
-        latent_dim=32,
+        latent_dim = 32,
         num_layers = 2,
         tau = 0.5
     ):
         super().__init__()
 
         self.num_modalities = 2
-        num_hidden = 128
-        activation = F.leaky_relu
         
-        gcn = Encoder(
+        _gcn = Encoder(
             num_genes, 
             latent_dim, 
-            activation, 
+            F.leaky_relu, 
             base_model=GCNConv, 
-            k=num_layers).to(device)
+            k=num_layers)
                 
-        self.gex_encoder = Model(
-                encoder=gcn, 
-                num_hidden=latent_dim, 
-                latent_dim=latent_dim, 
-                tau=tau
-            )
+        self.gex_encoder = GRACE(
+            encoder=_gcn, 
+            num_hidden=latent_dim, 
+            latent_dim=latent_dim, 
+            tau=tau
+        )
         
         self.pex_encoder = LinearBlock(
                 input_dim=num_proteins, 
                 output_dim=encoder_dim, 
                 dropout=dropout, 
-            )
+        )
 
         self.mean = LinearBlock(
             input_dim=encoder_dim, 
@@ -62,18 +59,24 @@ class JointVAE(nn.Module):
             dropout=dropout, 
         )
         
-        self.pex_decoder = LinearBlock(latent_dim, num_proteins, num_proteins)
+        self.pex_decoder = LinearBlock(
+            input_dim=latent_dim, 
+            output_dim=num_proteins, 
+            dropout=dropout
+        )
         
         self.adjacency = InnerProductDecoder(
             dropout=dropout, 
             act=lambda x: x,
-            latent_dim=latent_dim)
+            latent_dim=latent_dim
+        )
 
         ##  ω < 1 implies that modality 0 is weighted more
         self.omega = nn.Parameter(torch.rand(2))
 
     
-    def refactor(self, X):
+    def refactor(self, X) -> tuple[T, T, T]:
+        """Reparameterization trick to sample protein_z from N(mu, var)"""
         mu = self.mean(X)
         logvar = self.var(X)
         std = torch.exp(logvar / 2)
@@ -86,10 +89,10 @@ class JointVAE(nn.Module):
 
         return z, mu, logvar
 
-    def combine(self, Z, corr):
-        """This moves correspondent latent embeddings 
+    def combine(self, Z, corr) -> list[T, T]:
+        """Moves correspondent latent embeddings 
         in similar directions over the course of training 
-        and is key in the formation of similar latent spaces.""" 
+        and is key in the formation of similar latent spaces""" 
         
         return [
             (
@@ -105,40 +108,53 @@ class JointVAE(nn.Module):
         ]
 
 
-    def forward(self, 
-            gene_matrix, 
-            protein_matrix, 
-            adjacency_matrix, 
-            drop_edge_rate_1 = 0.4,
-            drop_edge_rate_2 = 0.5,
-            drop_feature_rate_1 = 0.3,
-            drop_feature_rate_2 = 0.2):
-        
-        output = Namespace()
-        A = adjacency_matrix
-        edge_index = adjacency_matrix.nonzero().t().contiguous()
-        corr = torch.eye(gene_matrix.shape[0], protein_matrix.shape[0]).to(device)
-        
-        encoded_pex = self.pex_encoder(protein_matrix)
-        
-        edge_index_1 = dropout_adj(edge_index, p=drop_edge_rate_1)[0]
-        edge_index_2 = dropout_adj(edge_index, p=drop_edge_rate_2)[0]
-        x_1 = drop_feature(gene_matrix, drop_feature_rate_1)
-        x_2 = drop_feature(gene_matrix, drop_feature_rate_2)
-        
+    def contrast_embeddings(self, gene_matrix, edge_index, extra_params) -> tuple[T, T]:
+        """Generates two views of the gene expression graph"""
+        edge_index_1 = dropout_adj(edge_index, p=extra_params.drop_edge_rate_1)[0]
+        edge_index_2 = dropout_adj(edge_index, p=extra_params.drop_edge_rate_2)[0]
+        x_1 = drop_feature(gene_matrix, extra_params.drop_feature_rate_1)
+        x_2 = drop_feature(gene_matrix, extra_params.drop_feature_rate_2)
         z1 = self.gex_encoder(x_1, edge_index_1)
         z2 = self.gex_encoder(x_2, edge_index_2)
-        gex_z = self.gex_encoder(gene_matrix, edge_index)
-        pex_z, mu, logvar = self.refactor(encoded_pex)
-        print(gex_z.shape, pex_z.shape)
-        zs = [gex_z, pex_z]
-        combined = self.combine(zs, corr)
-        pex_recons = self.pex_decoder(combined[0])
-        output.adj_recon = self.adjacency(combined[0])      
-        output.omega = self.omega  
+        
+        return z1, z2
+        
+    
 
+    def forward(self, gene_matrix, protein_matrix, adjacency_matrix, extra_params):
+        
+        ## Housekeeping
+        output = Namespace()
+        A = adjacency_matrix
+        edge_index = A.nonzero().t().contiguous()
+        corr = torch.eye(gene_matrix.shape[0], protein_matrix.shape[0]).to(device)
+        
+        ## st_gene_expression -> ~z1, ~z2
+        z1, z2 = self.contrast_embeddings(gene_matrix, edge_index, extra_params)
+        
+        ## st_gene_expression -> latent_space 
+        gex_z = self.gex_encoder(gene_matrix, edge_index)
+        
+        ## protein_expression -> latent_space 
+        encoded_pex = self.pex_encoder(protein_matrix)
+        pex_z, mu, logvar = self.refactor(encoded_pex)
+        
+        ## Align latent spaces        
+        combined = self.combine([gex_z, pex_z], corr)
+        
+        ## latent_space -> protein_expression
+        pex_recons = self.pex_decoder(combined[0])
+        
+        ## latent_space -> connected_graph
+        adj_recons = self.adjacency(combined[0]) 
+        
+        w = self.omega
+        
+        ## Output
+        output.gex_z, output.pex_z = gex_z, pex_z
         output.z1, output.z2 = z1, z2
-        output.gex_z, output.pex_z = zs
+        output.adj_recon = adj_recons     
+        output.omega = w
         output.pex_mu = mu
         output.pex_logvar = logvar
         output.gex_c, output.pex_c = combined
@@ -148,12 +164,13 @@ class JointVAE(nn.Module):
 
         return output
     
-    # @torch.no_grad()
-    # def swap_latent(self, gene_matrix, adj):
-    #     self.eval()
-    #     encoded_source = self.pex_encoder(gene_matrix, adj)
-    #     z = self.fc_mus[0](encoded_source, adj)
-    #     decoded = self.decoders[1](z)
-    #     return decoded.cpu().numpy()       
+    @torch.no_grad()
+    def swap_latent(self, gene_matrix, A):
+        self.eval()
+        edge_index = A.nonzero().t().contiguous()
+        gex_z = self.gex_encoder(gene_matrix, edge_index)
+        z = self.pex_decoder(gex_z)
+        pex_recons = self.pex_decoder(z)
+        return pex_recons.cpu().numpy()       
     
 

@@ -64,6 +64,8 @@ class Metrics:
         _values = self.values.__dict__
         
         for name, value in ledger.__dict__.items(): 
+            if 'loss' not in name:
+                continue
             loss += value
             if name not in _means:
                 _means[name] = _f(value)
