@@ -117,6 +117,9 @@ class JointVAE(nn.Module):
         z1 = self.gex_encoder(x_1, edge_index_1)
         z2 = self.gex_encoder(x_2, edge_index_2)
         
+        z1 = self.gex_encoder.projection(z1)
+        z2 = self.gex_encoder.projection(z2)
+        
         return z1, z2
         
     
@@ -143,7 +146,7 @@ class JointVAE(nn.Module):
         combined = self.combine([gex_z, pex_z], corr)
         
         ## latent_space -> protein_expression
-        pex_recons = self.pex_decoder(combined[0])
+        pex_recons = self.pex_decoder(combined[1])
         
         ## latent_space -> connected_graph
         adj_recons = self.adjacency(combined[0]) 
@@ -167,10 +170,8 @@ class JointVAE(nn.Module):
     @torch.no_grad()
     def swap_latent(self, gene_matrix, A):
         self.eval()
-        edge_index = A.nonzero().t().contiguous()
-        gex_z = self.gex_encoder(gene_matrix, edge_index)
-        z = self.pex_decoder(gex_z)
-        pex_recons = self.pex_decoder(z)
-        return pex_recons.cpu().numpy()       
+        return self.pex_decoder(
+            self.gex_encoder(gene_matrix, A.nonzero().t().contiguous())
+        ).detach().cpu().numpy()
     
 

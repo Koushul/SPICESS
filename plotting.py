@@ -16,7 +16,7 @@ def plot_latent(
     n_neighbors=None,
     seed=42,
     reduce_only=False,
-    save=False,
+    save=None,
     fmt='svg',
 ):
     method_names = {'pca': 'PC', 'umap': 'UMAP'}

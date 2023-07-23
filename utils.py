@@ -1,18 +1,16 @@
 from argparse import Namespace
-from matplotlib import pyplot as plt
 import numpy as np
 import scipy
-from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import MinMaxScaler
 import torch
 import scipy.sparse as sp
 from anndata import AnnData
-import networkx as nx
 from scipy.sparse import csr_matrix
 import math
 from scipy.stats import spearmanr
 from sklearn.metrics import roc_auc_score, f1_score
+import squidpy as sq
 
 def euclidean_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
@@ -99,7 +97,7 @@ def train_test_split(adata):
     adata.obs['train_test'] = category
     adata.obs['train_test'] = adata.obs['train_test'].astype('category')
 
-def featurize(input_adata, neighbors=20, clr=False):
+def featurize(input_adata, neighbors=6, clr=False, n_rings=1):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     varz = Namespace()
     features = input_adata.copy()
@@ -116,7 +114,11 @@ def featurize(input_adata, neighbors=20, clr=False):
     featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))
     feature = torch.tensor(featurelog)
 
-    adj = getA_knn(features.obsm['spatial'], neighbors)
+    sq.gr.spatial_neighbors(features, n_rings=n_rings, coord_type="grid", n_neighs=neighbors)
+
+    # adj = getA_knn(features.obsm['spatial'], neighbors)
+    adj = features.obsp["spatial_connectivities"]
+    
     adj_label = adj + sp.eye(adj.shape[0])
     adj_label = torch.tensor(adj_label.toarray()).to(device)
     pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()).to(device)
