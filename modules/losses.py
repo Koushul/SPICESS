@@ -235,20 +235,87 @@ class Loss:
         return self.compute(epoch, varz)
     
     def compute(self, epoch, varz) -> Namespace:
-        ledger = Namespace()
+        loss_bufffer = Namespace()
         a = self.alpha
-        ledger.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
-        ledger.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
-        ledger.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
-        ledger.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
-        ledger.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
-        ledger.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
-        ledger.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
-        ledger.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
-        ledger.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
-        ledger.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
-        ledger.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
-        ledger.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
+        loss_bufffer.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
+        loss_bufffer.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
+        loss_bufffer.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
+        loss_bufffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
+        loss_bufffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
+        loss_bufffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
+        loss_bufffer.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
+        loss_bufffer.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
+        loss_bufffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
+        loss_bufffer.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
+        loss_bufffer.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
+        loss_bufffer.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
                 
-        return ledger
+        return loss_bufffer
+        
+        # return loss_bufffer.kl_loss_gex, loss_bufffer.kl_loss_pex, loss_bufffer.recons_loss_gex, loss_bufffer.recons_loss_pex, loss_bufffer.cosine_loss_gex, loss_bufffer.cosine_loss_pex, loss_bufffer.consistency_loss, loss_bufffer.adj_loss, loss_bufffer.spatial_loss, loss_bufffer.alignment_loss, loss_bufffer.cross_loss, loss_bufffer.sigma_loss
     
+
+class Metrics:
+    def __init__(self, track=False):
+        self.track = track
+        self.means = Namespace()
+        self.counters = {}
+        self.values = Namespace()
+        self.losses = []
+        
+    def __str__(self) -> str:
+        str_repr = ''
+        for k, v in self.means.__dict__.items():
+            str_repr+=f'{k}: {v:.3e}'
+            str_repr+=' | '
+            
+        str_repr+=f'loss: {np.mean(self.losses):.3e}'
+        return str_repr
+    
+    def __repr__(self) -> str:
+        return self.__str__()  
+    
+    def custom_repr(self, keys):
+        ...  
+    
+    def update_value(self, name, value, track=False):
+        _means = self.means.__dict__
+        _values = self.values.__dict__
+        
+        if name not in _means:
+            _means[name] = _f(value)
+            self.counters[name] = 0
+            if track:
+                _values[name] = [_f(value)]
+        else:
+            _means[name] = (_f(
+                (_means[name]*self.counters[name]) + _f(value)
+            )) / (self.counters[name] + 1)
+            if track:
+                _values[name].append(_f(value))
+                
+        self.counters[name] += 1
+        
+                
+    def update(self, loss_bufffer):
+        loss = 0
+        all_losses = []
+        
+        for name, value in loss_bufffer.__dict__.items(): 
+            if 'loss' not in name:
+                continue 
+            self.update_value(name, value, track=self.track)
+            loss += value
+            all_losses.append(value)
+            
+        self.losses.append(_f(loss))
+        return torch.stack(all_losses)
+    
+    def __call__(self, ledger):
+        return self.update(ledger)
+        
+    def get(self, name):
+        return self.mean.__dict__.get(name, None)
+
+    def get_values(self, name):
+        return self.values.__dict__.get(name, None)
