@@ -13,6 +13,11 @@ from scipy.stats import spearmanr
 from sklearn.metrics import roc_auc_score, f1_score
 import squidpy as sq
 
+def disable(func):
+    def wrapper(*args, **kwargs):
+        return 0
+    return wrapper
+
 def euclidean_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 

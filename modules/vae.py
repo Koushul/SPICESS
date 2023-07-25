@@ -27,24 +27,24 @@ class JointVAE(nn.Module):
 
         self.num_modalities = 2
         
-        _gcn = Encoder(
+        self.gex_encoder = Encoder(
             num_genes, 
             latent_dim, 
             F.leaky_relu, 
             base_model=GCNConv, 
             k=num_layers)
                 
-        self.gex_encoder = GRACE(
-            encoder=_gcn, 
-            num_hidden=latent_dim, 
-            latent_dim=latent_dim, 
-            tau=tau
-        )
+        # self.gex_encoder = GRACE(
+        #     encoder=_gcn, 
+        #     num_hidden=latent_dim, 
+        #     latent_dim=latent_dim, 
+        #     tau=tau
+        # )
         
         self.pex_encoder = LinearBlock(
-                input_dim=num_proteins, 
-                output_dim=encoder_dim, 
-                dropout=dropout, 
+            input_dim=num_proteins, 
+            output_dim=encoder_dim, 
+            dropout=dropout,
         )
 
         self.mean = LinearBlock(
@@ -133,7 +133,7 @@ class JointVAE(nn.Module):
         corr = torch.eye(gene_matrix.shape[0], protein_matrix.shape[0]).to(device)
         
         ## st_gene_expression -> ~z1, ~z2
-        z1, z2 = self.contrast_embeddings(gene_matrix, edge_index, extra_params)
+        # z1, z2 = self.contrast_embeddings(gene_matrix, edge_index, extra_params)
         
         ## st_gene_expression -> latent_space 
         gex_z = self.gex_encoder(gene_matrix, edge_index)
@@ -155,7 +155,7 @@ class JointVAE(nn.Module):
         
         ## Output
         output.gex_z, output.pex_z = gex_z, pex_z
-        output.z1, output.z2 = z1, z2
+        # output.z1, output.z2 = z1, z2
         output.adj_recon = adj_recons     
         output.omega = w
         output.pex_mu = mu
