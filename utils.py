@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import scipy
 from sklearn.decomposition import PCA
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, kneighbors_graph
 from sklearn.preprocessing import MinMaxScaler
 import torch
 import scipy.sparse as sp
@@ -13,6 +13,8 @@ from scipy.sparse import csr_matrix
 import math
 from scipy.stats import spearmanr
 from sklearn.metrics import roc_auc_score, f1_score
+import gudhi
+import scanpy as sc
 
 def euclidean_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
@@ -24,6 +26,12 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     values = torch.from_numpy(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
     return torch.sparse.FloatTensor(indices, values, shape)
+
+def sparse_mx_to_torch_edge_list(sparse_mx):
+    sparse_mx = sparse_mx.tocoo().astype(np.float32)
+    edge_list = torch.from_numpy(
+        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
+    return edge_list
 
 def sparse_to_tuple(sparse_mx):
     if not sp.isspmatrix_coo(sparse_mx):
@@ -98,11 +106,44 @@ def train_test_split(adata):
                 break
     adata.obs['train_test'] = category
     adata.obs['train_test'] = adata.obs['train_test'].astype('category')
+    
 
-def featurize(input_adata, neighbors=20, clr=False):
+def graph_alpha(spatial_locs, n_neighbors=10):
+    """
+    Construct a geometry-aware spatial proximity graph of the spatial spots of cells by using alpha complex.
+    """
+    A_knn = kneighbors_graph(spatial_locs, n_neighbors=n_neighbors, mode='distance')
+    estimated_graph_cut = A_knn.sum() / float(A_knn.count_nonzero())
+    spatial_locs_list = spatial_locs.tolist()
+    n_node = len(spatial_locs_list)
+    alpha_complex = gudhi.AlphaComplex(points=spatial_locs_list)
+    simplex_tree = alpha_complex.create_simplex_tree(max_alpha_square=estimated_graph_cut ** 2)
+    skeleton = simplex_tree.get_skeleton(1)
+    initial_graph = nx.Graph()
+    initial_graph.add_nodes_from([i for i in range(n_node)])
+    for s in skeleton:
+        if len(s[0]) == 2:
+            initial_graph.add_edge(s[0][0], s[0][1])
+
+    extended_graph = nx.Graph()
+    extended_graph.add_nodes_from(initial_graph)
+    extended_graph.add_edges_from(initial_graph.edges)
+
+    # Remove self edges
+    for i in range(n_node):
+        try:
+            extended_graph.remove_edge(i, i)
+        except:
+            pass
+
+    return nx.to_scipy_sparse_matrix(extended_graph, format='csr')
+
+def featurize(input_adata, neighbors=20, clr=False, normalize_total=True):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     varz = Namespace()
     features = input_adata.copy()
+    if normalize_total:
+        sc.pp.normalize_total(features, target_sum=1e4)
     train_test_split(features)
     features.X = csr_matrix(features.X)
     features.X = features.X.toarray()
@@ -110,13 +151,16 @@ def featurize(input_adata, neighbors=20, clr=False):
 
     if clr:
         features = clr_normalize_each_cell(features)
+        
+
     
     featurelog = np.log2(features.X+1/2)
     scaler = MinMaxScaler()
     featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))
     feature = torch.tensor(featurelog)
 
-    adj = getA_knn(features.obsm['spatial'], neighbors)
+    # adj = getA_knn(features.obsm['spatial'], neighbors)
+    adj = graph_alpha(features.obsm['spatial'], n_neighbors=neighbors)
     adj_label = adj + sp.eye(adj.shape[0])
     adj_label = torch.tensor(adj_label.toarray()).to(device)
     pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()).to(device)
@@ -132,6 +176,8 @@ def featurize(input_adata, neighbors=20, clr=False):
     coords = torch.tensor(features.obsm['spatial']).float()
     sp_dists = torch.cdist(coords, coords, p=2)
     
+    
+    varz.edge_index = sparse_mx_to_torch_edge_list(adj).to(device)
     varz.sp_dists = torch.div(sp_dists, torch.max(sp_dists)).to(device)
     varz.features = feature
     varz.features_raw = features_raw

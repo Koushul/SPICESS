@@ -5,6 +5,7 @@ import numpy as np
 from math import prod
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+EPS = 1e-15
 
 def compute_distance(a, b, dist_method='euclidean'):
     if dist_method == 'cosine':
@@ -193,6 +194,16 @@ class LossFunctions:
         _, codiff = compute_distance(emb, comb)
         cosine_loss = torch.diag(codiff.square()).mean(axis=0) / emb.shape[1]
         return cosine_loss
+    
+    @staticmethod
+    def mutual_info_loss(pos_z, neg_z, summary, model_weight):
+        def discriminate(z, summary, sigmoid=True):            
+            summary = summary.t() if summary.dim() > 1 else summary
+            value = torch.matmul(z, torch.matmul(model_weight, summary))
+            return torch.sigmoid(value) if sigmoid else value        
+        pos_loss = -torch.log(discriminate(pos_z, summary, sigmoid=True) + EPS).mean()
+        neg_loss = -torch.log(1 - discriminate(neg_z, summary, sigmoid=True) + EPS).mean()
+        return pos_loss + neg_loss
 
 
 
@@ -235,26 +246,54 @@ class Loss:
         return self.compute(epoch, varz)
     
     def compute(self, epoch, varz) -> Namespace:
-        loss_bufffer = Namespace()
+        bufffer = Namespace()
         a = self.alpha
-        loss_bufffer.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
-        loss_bufffer.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
-        loss_bufffer.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
-        loss_bufffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
-        loss_bufffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
-        loss_bufffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
-        loss_bufffer.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
-        loss_bufffer.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
-        loss_bufffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
-        loss_bufffer.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
-        loss_bufffer.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
-        loss_bufffer.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
+        bufffer.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
+        bufffer.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
+        bufffer.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
+        bufffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
+        bufffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
+        bufffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
+        bufffer.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
+        bufffer.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
+        bufffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
+        bufffer.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
+        bufffer.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
+        bufffer.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
                 
-        return loss_bufffer
-        
-        # return loss_bufffer.kl_loss_gex, loss_bufffer.kl_loss_pex, loss_bufffer.recons_loss_gex, loss_bufffer.recons_loss_pex, loss_bufffer.cosine_loss_gex, loss_bufffer.cosine_loss_pex, loss_bufffer.consistency_loss, loss_bufffer.adj_loss, loss_bufffer.spatial_loss, loss_bufffer.alignment_loss, loss_bufffer.cross_loss, loss_bufffer.sigma_loss
+        return bufffer
     
+class MultiTaskLoss(torch.nn.Module):
+    """
+    https://arxiv.org/abs/1705.07115
+    Adapted from https://github.com/ywatanabe1989/custom_losses_pytorch/    
+    """
+    
+    def __init__(self, is_regression, reduction='sum'):
+        # super(MultiTaskLoss, self).__init__()
+        super().__init__()
+        
+        self.is_regression = is_regression
+        self.n_tasks = len(is_regression)
+        self.log_vars = torch.nn.Parameter(torch.zeros(self.n_tasks))
+        self.reduction = reduction
 
+
+    def forward(self, losses):
+        dtype = losses.dtype
+        device = losses.device
+        stds = (torch.exp(self.log_vars)**(1/2)).to(device).to(dtype)
+        self.is_regression = self.is_regression.to(device).to(dtype)
+        coeffs = 1 / ( (self.is_regression+1)*(stds**2) )
+        multi_task_losses = coeffs*losses + torch.log(stds)
+
+        if self.reduction == 'sum':
+            multi_task_losses = multi_task_losses.sum()
+        if self.reduction == 'mean':
+            multi_task_losses = multi_task_losses.mean()
+
+        return multi_task_losses
+    
 class Metrics:
     def __init__(self, track=False):
         self.track = track
@@ -297,11 +336,11 @@ class Metrics:
         self.counters[name] += 1
         
                 
-    def update(self, loss_bufffer):
+    def update(self, bufffer):
         loss = 0
         all_losses = []
         
-        for name, value in loss_bufffer.__dict__.items(): 
+        for name, value in bufffer.__dict__.items(): 
             if 'loss' not in name:
                 continue 
             self.update_value(name, value, track=self.track)
