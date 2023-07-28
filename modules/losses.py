@@ -7,6 +7,11 @@ from math import prod
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EPS = 1e-15
 
+def disable(func):
+    def wrapper(*args, **kwargs):
+        return torch.tensor(0.).cuda()
+    return wrapper
+
 def compute_distance(a, b, dist_method='euclidean'):
     if dist_method == 'cosine':
         # Cosine Similarity
@@ -177,18 +182,6 @@ class LossFunctions:
         
         return F_est
     
-    # @staticmethod
-    # def cosine_loss(emb1, emb2, comb1, comb2):
-    #     """Controls the cosine similarity between cross modality embeddings."""
-    #     _, codiff0 = compute_distance(emb1, comb1)
-    #     _, codiff1 = compute_distance(emb2, comb2)
-        
-    #     cosine_loss = (
-    #         torch.diag(codiff0.square()).mean(axis=0) / emb1.shape[1]
-    #         + torch.diag(codiff1.square()).mean(axis=0) / emb2.shape[1])
-        
-    #     return cosine_loss
-    
     @staticmethod
     def cosine_loss(emb, comb):
         _, codiff = compute_distance(emb, comb)
@@ -207,22 +200,9 @@ class LossFunctions:
 
 
 
-
-# class Annealer:
-#     def __init__(self, max_epochs):
-#         self.max_epochs = max_epochs
-        
-#     def __call__(self, epoch, beta):
-#         c = self.max_epochs / 2 
-#         kl_anneal = 1 / ( 1 + np.exp( - beta * (epoch - c) / c ) )
-#         kl_loss = 1e-3 * kl_anneal * kl_loss
-
-
-
-
 class Loss:
     
-    _base_alpha = 1e-3
+    _base_alpha = 1.0
     
     def __init__(self, max_epochs):
         self.max_epochs = max_epochs        
@@ -312,7 +292,7 @@ class Metrics:
         return str_repr
     
     def __repr__(self) -> str:
-        return self.__str__()  
+        return self.__str__() 
     
     def custom_repr(self, keys):
         ...  
