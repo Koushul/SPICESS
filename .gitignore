@@ -19,6 +19,9 @@ lib64/
 parts/
 sdist/
 var/
+resultsCoLocatedGroupsSklearnNMF_4194locations_34factors/
+reference_signatures/
+cell2location_map/
 wheels/
 share/python-wheels/
 *.egg-info/

@@ -152,8 +152,6 @@ def featurize(input_adata, neighbors=20, clr=False, normalize_total=True):
     if clr:
         features = clr_normalize_each_cell(features)
         
-
-    
     featurelog = np.log2(features.X+1/2)
     scaler = MinMaxScaler()
     featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))
@@ -216,3 +214,44 @@ def calculate_precision_recall(adj, adj_predicted):
     precision = precision_score(adj.flatten(), adj_predicted.flatten())
     recall = recall_score(adj.flatten(), adj_predicted.flatten())
     return precision, recall
+
+
+
+def select_points_for_rectangle(points, bottom_left, top_right):
+    """
+    Select points that are within the area of a rectangle.
+
+    Parameters:
+    points (list of tuples): The points to select from.
+    bottom_left (tuple): The coordinates of the bottom left corner of the rectangle.
+    top_right (tuple): The coordinates of the top right corner of the rectangle.
+
+    Returns:
+    list of tuples: The selected points.
+    """
+    selected_points = []
+    for point in points:
+        if bottom_left[0] <= point[0] <= top_right[0] and bottom_left[1] <= point[1] <= top_right[1]:
+            selected_points.append(point)
+    return selected_points
+
+
+def select_points_for_concentric_circles(points, center, inner_radius, outer_radius):
+    """
+    Select points that are within the area of two concentric circles.
+
+    Parameters:
+    points (list of tuples): The points to select from.
+    center (tuple): The center of the circles.
+    inner_radius (float): The radius of the inner circle.
+    outer_radius (float): The radius of the outer circle.
+
+    Returns:
+    list of tuples: The selected points.
+    """
+    selected_points = []
+    for point in points:
+        distance_from_center = np.sqrt((point[0] - center[0])**2 + (point[1] - center[1])**2)
+        if inner_radius <= distance_from_center <= outer_radius:
+            selected_points.append(point)
+    return selected_points

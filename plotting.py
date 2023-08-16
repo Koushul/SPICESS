@@ -6,7 +6,7 @@ np.random.seed(1)
 def plot_latent(
     data,
     labels,
-    names=['Gene\nExpression', 'Protein\nExpression'],
+    names=['Gene\nEmbeddings', 'Protein\nEmbeddings'],
     legend=False,
     remove_outliers=False,
     n_components=2,
@@ -17,11 +17,29 @@ def plot_latent(
     seed=42,
     reduce_only=False,
     save=None,
+    colors=None,
+    size=100,
     fmt='svg',
 ):
     method_names = {'pca': 'PC', 'umap': 'UMAP'}
     axs = []
     datax = []
+    
+    if colors is None:
+        colors = ["#4a3e38",
+                "#9fbfa2",
+                "#b99bbd",
+                "#53366c",
+                "#b2834b",
+                "#00612e",
+                "#00acef",
+                "#00eee9",
+                "#ba4850",
+                "#cac84d",
+                "#ce52ad",
+                "#76d05c",
+                "#794bc8",
+                "#e85a00"]
     
     plt.rcParams['figure.figsize'] = (16, 8)
 
@@ -40,16 +58,17 @@ def plot_latent(
                 red.fit(np.concatenate(data, axis=0))
         plot_data = red.transform(dat)
         datax.append(plot_data)
-
-        for l in np.unique(np.concatenate(labels)):
+        
+        unique_labels = np.unique(np.concatenate(labels))
+        for ix, l in enumerate(unique_labels):
             data_subset = np.transpose(plot_data[lab == l])
             if remove_outliers:
                 data_subset[~filter[lab == l].T] = np.nan
             # ax.scatter(*data_subset, s=3e3*(1/dat.shape[0]), label=l)
-            ax.scatter(*data_subset, s=55, label=l, edgecolors='black')
-            
-        if i == 1 and legend:
-            ax.legend()
+            scatter = ax.scatter(*data_subset, label=l, edgecolors='black', color=colors[ix], s=size)
+        fig = plt.gcf()
+        # if i == 1 and legend:
+        #     fig.legend(scatter, labels=unique_labels, bbox_to_anchor=(0.5, -0.05), loc='lower center', ncols=7)
         if names is not None:
             ax.set_title(names[i])
         ax.set_xlabel(f'{method_names[method]}-1')
@@ -57,7 +76,7 @@ def plot_latent(
         if n_components == 2 and square:
             ax.set_aspect('equal')
         elif n_components == 3:
-            ax.set_zlabel(f'{method_names[method]}-3')
+            # ax.set_zlabel(f'{method_names[method]}-3')
             if square:
                 # https://stackoverflow.com/a/13701747
                 X, Y, Z = np.transpose(plot_data)
@@ -82,10 +101,16 @@ def plot_latent(
         for ax in axs:
             ax.set_xlim(new_xlim)
             ax.set_ylim(new_ylim)
-            
-
+    
+    if i == 1 and legend:
+        fig.legend(scatter, labels=unique_labels, bbox_to_anchor=(0.5, -0.05), loc='lower center', ncols=7)
+   
+          
+    plt.tight_layout()
+    fig.subplots_adjust(bottom=0.2)  
+    
     if save is not None:
-        plt.savefig(save, format=fmt, dpi=180)
+        plt.savefig(save, format=fmt, dpi=180, bbox_inches='tight')
     
     if reduce_only:
         plt.close()

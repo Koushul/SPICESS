@@ -184,7 +184,7 @@ class LossFunctions:
     
     @staticmethod
     def cosine_loss(emb, comb):
-        _, codiff = compute_distance(emb, comb)
+        cosim, codiff = compute_distance(emb, comb)
         cosine_loss = torch.diag(codiff.square()).mean(axis=0) / emb.shape[1]
         return cosine_loss
     
@@ -202,7 +202,7 @@ class LossFunctions:
 
 class Loss:
     
-    _base_alpha = 1.0
+    _base_alpha = 0.1
     
     def __init__(self, max_epochs):
         self.max_epochs = max_epochs        
@@ -218,7 +218,10 @@ class Loss:
             'spatial': self._base_alpha,
             'alignment': self._base_alpha,
             'balance': self._base_alpha,
-            'cross': self._base_alpha
+            'cross': self._base_alpha,
+            'mutual_gex': self._base_alpha,
+            'mutual_pex': self._base_alpha,
+            
         }
 
 
@@ -226,22 +229,25 @@ class Loss:
         return self.compute(epoch, varz)
     
     def compute(self, epoch, varz) -> Namespace:
-        bufffer = Namespace()
+        buffer = Namespace()
         a = self.alpha
-        bufffer.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
-        bufffer.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
-        bufffer.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
-        bufffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
-        bufffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
-        bufffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
-        bufffer.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
-        bufffer.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
-        bufffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
-        bufffer.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
-        bufffer.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
-        bufffer.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
-                
-        return bufffer
+        buffer.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
+        buffer.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
+        buffer.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
+        buffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
+        buffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
+        buffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
+        # buffer.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
+        buffer.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
+        buffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
+        # buffer.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
+        # buffer.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
+        # buffer.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
+        buffer.mutual_info_loss = a['mutual_gex'] * LossFunctions.mutual_info_loss(varz.gex_pos_z, varz.gex_neg_z, varz.gex_summary, varz.gex_model_weight)
+        buffer.mutual_info_loss = a['mutual_pex'] * LossFunctions.mutual_info_loss(varz.pex_pos_z, varz.pex_neg_z, varz.pex_summary, varz.pex_model_weight)
+        
+    
+        return buffer
     
 class MultiTaskLoss(torch.nn.Module):
     """

@@ -10,6 +10,12 @@ from torch_geometric.nn import GCNConv
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def sparse_mx_to_torch_edge_list(sparse_mx):
+    sparse_mx = sparse_mx.tocoo().astype(np.float32)
+    edge_list = torch.from_numpy(
+        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
+    return edge_list
+
 class GraphEncoder(nn.Module):
     def __init__(self, in_channels, hidden_channels):
         super(GraphEncoder, self).__init__()
@@ -41,34 +47,27 @@ class InfoMaxVAE(nn.Module):
         self.num_modalities = 2
         
         self.encoders = nn.ModuleList([
-            # GraphConvolution(
-            #     input_dim=input_dim[0], 
-            #     output_dim=encoder_dim, 
-            #     dropout=dropout, 
-            #     act=F.leaky_relu
-            # ),
             DeepGraphInfomax(
                 hidden_channels=latent_dim, 
                 encoder=GraphEncoder(input_dim[0], latent_dim),
                 summary=lambda z, *args, **kwargs: torch.sigmoid(z.mean(dim=0)),
                 corruption=corruption),
-            GraphConvolution(
-                input_dim=input_dim[1], 
-                output_dim=encoder_dim, 
-                dropout=dropout, 
-                act=F.leaky_relu
-            )
+            DeepGraphInfomax(
+                hidden_channels=latent_dim, 
+                encoder=GraphEncoder(input_dim[1], latent_dim),
+                summary=lambda z, *args, **kwargs: torch.sigmoid(z.mean(dim=0)),
+                corruption=corruption),
         ])
 
         self.fc_mus = nn.ModuleList([
             GraphConvolution(
-                input_dim=encoder_dim, 
+                input_dim=latent_dim, 
                 output_dim=latent_dim, 
                 dropout=dropout, 
                 act=F.leaky_relu
             ),
             GraphConvolution(
-                input_dim=encoder_dim, 
+                input_dim=latent_dim, 
                 output_dim=latent_dim, 
                 dropout=dropout, 
                 act=F.leaky_relu
@@ -120,11 +119,15 @@ class InfoMaxVAE(nn.Module):
             dropout=dropout, 
             act=lambda x: x)
 
-        ##  ω < 1 implies that modality 0 is weighted more
-        self.omega = nn.Parameter(torch.rand(2))
+        # self.omega = nn.Parameter(torch.rand(2))
+        
 
     def encode(self, X, A):
-        return [self.encoders[i](X[i], A) for i in range(self.num_modalities)]
+        edge_index = A.nonzero().t().contiguous()
+        gex_pos_z, gex_neg_z, gex_summary = self.encoders[0](X[0], edge_index)
+        pex_pos_z, pex_neg_z, pex_summary = self.encoders[1](X[1], edge_index)                
+        return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
+        
 
     def refactor(self, X, A, index=None):
         if index is None:
@@ -149,6 +152,9 @@ class InfoMaxVAE(nn.Module):
         in similar directions over the course of training 
         and is key in the formation of similar latent spaces.""" 
         
+        mZ = 0.5*(Z[0] + Z[1])        
+        return [mZ, mZ]
+        
         return [
             (
                 self.omega[i] * Z[i]
@@ -164,19 +170,31 @@ class InfoMaxVAE(nn.Module):
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(self.num_modalities)]
+    
+    
+
 
     def forward(self, X, A):
         output = Namespace()
         corr = torch.eye(X[0].shape[0], X[1].shape[0]).to(device)
         
-        encoded = self.encode(X, A)
+        gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary = self.encode(X, A)
+        encoded = [gex_pos_z, pex_pos_z]
         zs, mus, logvars = self.refactor(encoded, A)
         combined = self.combine(zs, corr)
         X_hat = self.decode(combined)
         output.adj_recon = self.adjacency(combined[0])      
-        output.omega = self.omega  
+        # output.omega = self.omega  
 
         output.gex_z, output.pex_z = zs
+        output.gex_pos_z = gex_pos_z
+        output.pex_pos_z = pex_pos_z
+        output.gex_neg_z = gex_neg_z
+        output.pex_neg_z = pex_neg_z
+        output.gex_summary = gex_summary
+        output.pex_summary = pex_summary
+        output.gex_model_weight = self.encoders[0].weight
+        output.pex_model_weight = self.encoders[1].weight
         output.gex_mu, output.pex_mu = mus
         output.gex_logvar, output.pex_logvar = logvars
         output.gex_c, output.pex_c = combined
@@ -185,12 +203,14 @@ class InfoMaxVAE(nn.Module):
 
         return output
     
+    
     @torch.no_grad()
-    def swap_latent(self, source, adj, from_modality=0, to_modality=1):
+    def impute(self, X, adj):
         self.eval()
-        encoded_source = self.encoders[from_modality](source, adj)
-        z = self.fc_mus[from_modality](encoded_source, adj)
-        decoded = self.decoders[to_modality](z)
+        edge_index = adj.nonzero().t().contiguous()
+        pos_z, neg_z, summary = self.encoders[0](X, edge_index)
+        z = self.fc_mus[0](pos_z, adj)
+        decoded = self.decoders[1](z)
         return decoded.cpu().numpy()       
     
 
