@@ -1,3 +1,5 @@
+## Author: Koushul Ramjattun
+
 from argparse import Namespace
 import torch
 import torch.nn as nn
@@ -119,7 +121,6 @@ class InfoMaxVAE(nn.Module):
             dropout=dropout, 
             act=lambda x: x)
 
-        # self.omega = nn.Parameter(torch.rand(2))
         
 
     def encode(self, X, A):

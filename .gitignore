@@ -163,4 +163,8 @@ cython_debug/
 #.idea/
 
 ##notebooks
-*.ipynb
+SpaceFlow.ipynb
+SpaceFlow.ipynb
+cTPnet.ipynb
+
+# *.ipynb
