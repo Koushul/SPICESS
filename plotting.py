@@ -1,7 +1,126 @@
 import cuml
 import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
+from sklearn.decomposition import PCA
+from scipy.stats import spearmanr
+
+
 np.random.seed(1)
+
+ref_colors = [
+    "#4a3e38",
+    "#9fbfa2",
+    "#b99bbd",
+    "#53366c",
+    "#b2834b",
+    "#00612e",
+    "#00acef",
+    "#00eee9",
+    "#ba4850",
+    "#cac84d",
+    "#ce52ad",
+    "#76d05c",
+    "#794bc8",
+    "#e85a00"
+]
+
+
+def plot_recons(integrated_data):
+    gex_recons = integrated_data.gex_recons.data.cpu().numpy()
+    gex_input = integrated_data.gex_input.data.cpu().numpy()
+    pex_recons = integrated_data.pex_recons.data.cpu().numpy()
+    pex_input = integrated_data.pex_input.data.cpu().numpy()
+
+    f, axs = plt.subplots(1, 2, figsize=(12, 3), dpi=140)
+
+    corrs = []
+    for ixs in range(gex_input.shape[1]):
+        corrs.append(spearmanr(gex_input[:, ixs], gex_recons[:, ixs]).statistic)  
+    sns.histplot(corrs, color='red', alpha=0.5, label='TrainedModel', ax=axs[0])
+    axs[0].set_title(f'Gene Reconstruction\nMean:{np.mean(corrs):.3f}')
+    axs[0].set_xlabel('Spearman Correlation')
+    plt.xlim(0, 1)
+
+    corrs = []
+    for ixs in range(pex_input.shape[1]):
+        corrs.append(spearmanr(pex_input[:, ixs], pex_recons[:, ixs]).statistic)   
+    corrs = np.array(corrs)
+    sns.histplot(corrs, color='green', alpha=0.5, label='TrainedModel', ax=axs[1])
+    axs[1].set_title(f'Protein Reconstruction\nMean:{np.mean(corrs):.3f}')
+    axs[1].set_xlabel('Spearman Correlation')
+    plt.xlim(0, 1)
+    plt.show()
+
+
+
+
+def plot_norm(encoded, labels):
+    
+    z = np.random.multivariate_normal([0]*2, np.eye(2), len(labels))
+    xy = PCA(2).fit_transform(encoded)
+    plt.rcParams['figure.figsize'] = [6, 6]
+
+    sns.scatterplot(x=z[:, 0], y=z[:, 1], color='grey', alpha=0.2, s=70)
+    sns.scatterplot(x=xy[:, 0], y=xy[:, 1], hue=labels, edgecolor='black', s=65, legend=False)
+    sns.despine(left=True, bottom=True, trim=True, offset=10)
+    plt.xlabel('PCA-1')
+    plt.ylabel('PCA-2')
+    plt.show()
+
+
+def plot_umap_grid(
+    emb, 
+    imputed_proteins, 
+    protein_names, 
+    celltype_labels, 
+    cmap='winter', 
+    size=40, 
+    save=None, 
+    fmt='svg', 
+    colors=None):
+    
+    plt.rcParams['figure.figsize'] = (12, 12)
+    
+    if colors is None:
+        colors = ref_colors
+
+    f, axx = plt.subplots(4, 7, figsize=(37, 16), dpi=120, sharex=True, sharey=True)
+    axs = axx.flatten()
+
+    norm = plt.Normalize(0, int(imputed_proteins.max()))
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    f.colorbar(sm, ax=axx[:, :], shrink=0.6, location='right')
+
+    for ix, ax in enumerate(axs):
+        # if ix == list(protein_names).index('FCGR3A'):
+        #     sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=celltype_labels, edgecolor='black', s=size, ax=ax, palette=colors, legend=True)
+        #     ax.set_title('Celltypes')
+        #     ax.legend(ncols=14, bbox_to_anchor=(8.2, 1.5), fontsize=9.2)
+        #     ax.spines['right'].set_visible(False)
+        #     ax.spines['top'].set_visible(False)
+        #     ax.spines['left'].set_visible(False)
+        #     ax.spines['bottom'].set_visible(False)
+            
+        sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
+        
+        ax.set_title(protein_names[ix])
+        ax.get_legend().remove()
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    
+
+    if save is not None:
+        plt.savefig(save, format=fmt, dpi=180)
+    plt.show()
+
+
 
 def plot_latent(
     data,
@@ -26,20 +145,7 @@ def plot_latent(
     datax = []
     
     if colors is None:
-        colors = ["#4a3e38",
-                "#9fbfa2",
-                "#b99bbd",
-                "#53366c",
-                "#b2834b",
-                "#00612e",
-                "#00acef",
-                "#00eee9",
-                "#ba4850",
-                "#cac84d",
-                "#ce52ad",
-                "#76d05c",
-                "#794bc8",
-                "#e85a00"]
+        colors = ref_colors
     
     plt.rcParams['figure.figsize'] = (16, 8)
 
@@ -62,10 +168,8 @@ def plot_latent(
         unique_labels = np.unique(np.concatenate(labels))
         for ix, l in enumerate(unique_labels):
             data_subset = np.transpose(plot_data[lab == l])
-            if remove_outliers:
-                data_subset[~filter[lab == l].T] = np.nan
-            # ax.scatter(*data_subset, s=3e3*(1/dat.shape[0]), label=l)
-            scatter = ax.scatter(*data_subset, label=l, edgecolors='black', color=colors[ix], s=size)
+
+            scatter = ax.scatter(*data_subset, label=l, edgecolor='black', color=colors[ix], s=size)
         fig = plt.gcf()
         # if i == 1 and legend:
         #     fig.legend(scatter, labels=unique_labels, bbox_to_anchor=(0.5, -0.05), loc='lower center', ncols=7)
@@ -75,18 +179,6 @@ def plot_latent(
         ax.set_ylabel(f'{method_names[method]}-2')
         if n_components == 2 and square:
             ax.set_aspect('equal')
-        elif n_components == 3:
-            # ax.set_zlabel(f'{method_names[method]}-3')
-            if square:
-                # https://stackoverflow.com/a/13701747
-                X, Y, Z = np.transpose(plot_data)
-                # Create cubic bounding box to simulate equal aspect ratio
-                max_range = np.array([X.max()-X.min(), Y.max()-Y.min(), Z.max()-Z.min()]).max()
-                Xb = 0.5*max_range*np.mgrid[-1:2:2,-1:2:2,-1:2:2][0].flatten() + 0.5*(X.max()+X.min())
-                Yb = 0.5*max_range*np.mgrid[-1:2:2,-1:2:2,-1:2:2][1].flatten() + 0.5*(Y.max()+Y.min())
-                Zb = 0.5*max_range*np.mgrid[-1:2:2,-1:2:2,-1:2:2][2].flatten() + 0.5*(Z.max()+Z.min())
-                for xb, yb, zb in zip(Xb, Yb, Zb):
-                    ax.plot([xb], [yb], [zb], 'w')
                     
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)

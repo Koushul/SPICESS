@@ -213,12 +213,8 @@ class Loss:
             'recons_pex': self._base_alpha,
             'cosine_gex': self._base_alpha,
             'cosine_pex': self._base_alpha,
-            'consistency': self._base_alpha,
             'adj': self._base_alpha,
             'spatial': self._base_alpha,
-            'alignment': self._base_alpha,
-            'balance': self._base_alpha,
-            'cross': self._base_alpha,
             'mutual_gex': self._base_alpha,
             'mutual_pex': self._base_alpha,
             
@@ -237,12 +233,8 @@ class Loss:
         buffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
         buffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
         buffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
-        # buffer.consistency_loss = a['consistency'] * LossFunctions.f_recons(varz.gex_c, varz.pex_c)
         buffer.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
         buffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
-        # buffer.alignment_loss = a['alignment'] * LossFunctions.alignment_loss(varz.gex_z, varz.pex_z, varz.corr)
-        # buffer.cross_loss = a['cross'] * LossFunctions.cross_loss(varz.gex_c, varz.pex_c, varz.corr)
-        # buffer.sigma_loss = a['balance'] * LossFunctions.balance_loss(varz.omega)
         buffer.mutual_info_loss = a['mutual_gex'] * LossFunctions.mutual_info_loss(varz.gex_pos_z, varz.gex_neg_z, varz.gex_summary, varz.gex_model_weight)
         buffer.mutual_info_loss = a['mutual_pex'] * LossFunctions.mutual_info_loss(varz.pex_pos_z, varz.pex_neg_z, varz.pex_summary, varz.pex_model_weight)
         

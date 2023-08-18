@@ -147,44 +147,29 @@ class InfoMaxVAE(nn.Module):
             logvars.append(logvar)
         return zs, mus, logvars
 
-    def combine(self, Z, corr):
+    def combine(self, Z):
         """This moves correspondent latent embeddings 
         in similar directions over the course of training 
-        and is key in the formation of similar latent spaces.""" 
-        
+        and is key in the formation of similar latent spaces."""         
         mZ = 0.5*(Z[0] + Z[1])        
         return [mZ, mZ]
-        
-        return [
-            (
-                self.omega[i] * Z[i]
-                + self.omega[(i + 1) % 2] * torch.mm(
-                    corr if i == 0 else torch.t(corr),
-                    Z[(i + 1) % 2])
-            ) / (
-                self.omega[i]
-                + self.omega[(i + 1) % 2] * corr.sum((i + 1) % 2).reshape(-1, 1)
-            )
-            for i in range(self.num_modalities)
-        ]
+
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(self.num_modalities)]
     
     
 
-
     def forward(self, X, A):
         output = Namespace()
-        corr = torch.eye(X[0].shape[0], X[1].shape[0]).to(device)
+        # corr = torch.eye(X[0].shape[0], X[1].shape[0]).to(device)
         
         gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary = self.encode(X, A)
         encoded = [gex_pos_z, pex_pos_z]
         zs, mus, logvars = self.refactor(encoded, A)
-        combined = self.combine(zs, corr)
+        combined = self.combine(zs)
         X_hat = self.decode(combined)
         output.adj_recon = self.adjacency(combined[0])      
-        # output.omega = self.omega  
 
         output.gex_z, output.pex_z = zs
         output.gex_pos_z = gex_pos_z
