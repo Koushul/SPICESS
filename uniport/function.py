@@ -251,6 +251,7 @@ def label_reweight(celltype):
 
 # @profile
 def Run(
+        name,
         adatas=None,     
         adata_cm=None,   
         mode='h',
@@ -400,7 +401,7 @@ def Run(
     else:
         device='cpu'
     
-    print('Device:', device)
+    # print('Device:', device)
 
     outdir = outdir+'/'
     os.makedirs(outdir+'/checkpoint', exist_ok=True)
@@ -475,7 +476,7 @@ def Run(
             num_workers=num_workers
         )
 
-        early_stopping = EarlyStopping(patience=patience, checkpoint_file=outdir+'/checkpoint/model.pt')
+        early_stopping = EarlyStopping(patience=patience, checkpoint_file=outdir+f'/checkpoint/{name}.pt')
         
         # encoder structure
         if enc is None:
@@ -527,15 +528,15 @@ def Run(
             verbose=verbose,
             loss_type=loss_type,
         )
-        torch.save({'enc':enc, 'dec':dec, 'n_domain':n_domain, 'ref_id':ref_id, 'num_gene':num_gene}, outdir+'/checkpoint/config.pt')     
+        torch.save({'enc':enc, 'dec':dec, 'n_domain':n_domain, 'ref_id':ref_id, 'num_gene':num_gene}, outdir+f'/checkpoint/{name}_config.pt')     
 
 
     # project or predict
     else:
-        state = torch.load(outdir+'/checkpoint/config.pt')
+        state = torch.load(outdir+f'/checkpoint/{name}_config.pt')
         enc, dec, n_domain, ref_id, num_gene = state['enc'], state['dec'], state['n_domain'], state['ref_id'], state['num_gene']
         model = VAE(enc, dec, ref_id=ref_id, n_domain=n_domain, mode=mode)
-        model.load_model(outdir+'/checkpoint/model.pt')
+        model.load_model(outdir+f'/checkpoint/{name}.pt')
         model.to(device)
         
         _, testloader = load_data(

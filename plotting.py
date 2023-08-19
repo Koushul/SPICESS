@@ -68,6 +68,8 @@ def plot_norm(encoded, labels):
     plt.ylabel('PCA-2')
     plt.show()
 
+import pandas as pd
+antibody_panel = pd.read_csv('antibody_panel.csv')
 
 def plot_umap_grid(
     emb, 
@@ -85,13 +87,13 @@ def plot_umap_grid(
     if colors is None:
         colors = ref_colors
 
-    f, axx = plt.subplots(4, 7, figsize=(37, 16), dpi=120, sharex=True, sharey=True)
+    f, axx = plt.subplots(5, 6, figsize=(37, 16), dpi=120, sharex=True, sharey=True)
     axs = axx.flatten()
 
     norm = plt.Normalize(0, int(imputed_proteins.max()))
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    f.colorbar(sm, ax=axx[:, :], shrink=0.6, location='right')
+    f.colorbar(sm, ax=axx[:, :], shrink=0.55, location='right')
 
     for ix, ax in enumerate(axs):
         # if ix == list(protein_names).index('FCGR3A'):
@@ -105,7 +107,13 @@ def plot_umap_grid(
             
         sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
         
-        ax.set_title(protein_names[ix])
+        try:
+            _, name, desc = antibody_panel[antibody_panel.name==protein_names[ix]].values[0]
+        except Exception as e:
+            print(protein_names[ix])
+            raise e
+        
+        ax.set_title(f'{name}\n({desc})')
         ax.get_legend().remove()
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
@@ -113,6 +121,7 @@ def plot_umap_grid(
         ax.spines['bottom'].set_visible(False)
         ax.set_xticks([])
         ax.set_yticks([])
+        
 
     
 

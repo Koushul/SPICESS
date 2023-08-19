@@ -31,65 +31,7 @@ def compute_distance(a, b, dist_method='euclidean'):
         return sim, dist
 
 _f = lambda x: float(x)
-class Metrics:
-    def __init__(self, track=False):
-        self.track = track
-        self.means = Namespace()
-        self.counters = {}
-        self.values = Namespace()
-        self.losses = []
-        
-    def __str__(self) -> str:
-        str_repr = ''
-        for k, v in self.means.__dict__.items():
-            str_repr+=f'{k}: {v:.3e}'
-            str_repr+=' | '
-            
-        str_repr+=f'loss: {np.mean(self.losses):.3e}'
-        return str_repr
-    
-    def __repr__(self) -> str:
-        return self.__str__()  
-    
-    def custom_repr(self, keys):
-        ...  
-    
-    def update_value(self, name, value):
-        ... 
 
-        
-    def update(self, ledger):
-        loss = 0
-        _means = self.means.__dict__
-        _values = self.values.__dict__
-        
-        for name, value in ledger.__dict__.items(): 
-            loss += value
-            if name not in _means:
-                _means[name] = _f(value)
-                self.counters[name] = 0
-                if self.track:
-                    _values[name] = [_f(value)]
-            else:
-                _means[name] = (_f(
-                    (_means[name]*self.counters[name]) + _f(value)
-                )) / (self.counters[name] + 1)
-                if self.track:
-                    _values[name].append(_f(value))
-            self.counters[name] += 1
-        self.losses.append(_f(loss))
-        
-        return loss
-    
-    def __call__(self, ledger):
-        return self.update(ledger)
-    
-    def get(self, name):
-        return self.mean.__dict__.get(name, None)
-
-    def get_values(self, name):
-        return self.values.__dict__.get(name, None)
-    
     
 class LossFunctions:
 
