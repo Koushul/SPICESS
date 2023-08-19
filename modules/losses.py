@@ -9,7 +9,7 @@ EPS = 1e-15
 
 def disable(func):
     def wrapper(*args, **kwargs):
-        return torch.tensor(0.).cuda()
+        return torch.tensor(0.).to(device)
     return wrapper
 
 def compute_distance(a, b, dist_method='euclidean'):
@@ -180,7 +180,6 @@ class Loss:
         buffer.mutual_info_loss = a['mutual_gex'] * LossFunctions.mutual_info_loss(varz.gex_pos_z, varz.gex_neg_z, varz.gex_summary, varz.gex_model_weight)
         buffer.mutual_info_loss = a['mutual_pex'] * LossFunctions.mutual_info_loss(varz.pex_pos_z, varz.pex_neg_z, varz.pex_summary, varz.pex_model_weight)
         
-    
         return buffer
     
 class MultiTaskLoss(torch.nn.Module):
