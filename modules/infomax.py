@@ -141,7 +141,7 @@ def drop_feature(x, drop_prob):
 
 
 
-class DeepGraphInfomax(torch.nn.Module):
+class ContrastiveGraph(torch.nn.Module):
     ## Adapted from https://arxiv.org/abs/1809.10341
 
     def __init__(self, hidden_channels, encoder, summary, corruption):

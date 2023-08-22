@@ -38,5 +38,5 @@ class GraphConvolution(nn.Module):
         output = self.act(output)
         return output
 
-    def __repr__(self) -> str:
-        return self.__class__.__name__ + ' (' + str(self.input_dim) + ' -> '+ str(self.output_dim) + ')'
+    # def __repr__(self) -> str:
+    #     return self.__class__.__name__ + ' (' + str(self.input_dim) + ' -> '+ str(self.output_dim) + ')'

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from modules.graph import GraphConvolution
 from modules.inner_product import InnerProductDecoder
 import numpy as np
-from modules.infomax import DeepGraphInfomax
+from modules.infomax import ContrastiveGraph
 from torch_geometric.nn import GCNConv
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -49,12 +49,12 @@ class InfoMaxVAE(nn.Module):
         self.num_modalities = 2
         
         self.encoders = nn.ModuleList([
-            DeepGraphInfomax(
+            ContrastiveGraph(
                 hidden_channels=latent_dim, 
                 encoder=GraphEncoder(input_dim[0], latent_dim),
                 summary=lambda z, *args, **kwargs: torch.sigmoid(z.mean(dim=0)),
                 corruption=corruption),
-            DeepGraphInfomax(
+            ContrastiveGraph(
                 hidden_channels=latent_dim, 
                 encoder=GraphEncoder(input_dim[1], latent_dim),
                 summary=lambda z, *args, **kwargs: torch.sigmoid(z.mean(dim=0)),

@@ -1,4 +1,8 @@
-import cuml
+try:
+    import cuml
+except: ## No GPU?
+    import umap.umap_ as cuml
+    
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -69,7 +73,7 @@ def plot_norm(encoded, labels):
     plt.show()
 
 import pandas as pd
-antibody_panel = pd.read_csv('antibody_panel.csv')
+antibody_panel = pd.read_csv('/ihome/hosmanbeyoglu/kor11/tools/SPICESS/notebooks/antibody_panel.csv')
 
 def plot_umap_grid(
     emb, 
@@ -127,7 +131,10 @@ def plot_umap_grid(
 
     if save is not None:
         plt.savefig(save, format=fmt, dpi=180)
+        
     plt.show()
+    
+    
 
 
 
