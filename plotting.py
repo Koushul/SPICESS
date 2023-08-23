@@ -79,7 +79,6 @@ def plot_umap_grid(
     emb, 
     imputed_proteins, 
     protein_names, 
-    celltype_labels, 
     cmap='winter', 
     size=40, 
     save=None, 
@@ -100,14 +99,6 @@ def plot_umap_grid(
     f.colorbar(sm, ax=axx[:, :], shrink=0.55, location='right')
 
     for ix, ax in enumerate(axs):
-        # if ix == list(protein_names).index('FCGR3A'):
-        #     sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=celltype_labels, edgecolor='black', s=size, ax=ax, palette=colors, legend=True)
-        #     ax.set_title('Celltypes')
-        #     ax.legend(ncols=14, bbox_to_anchor=(8.2, 1.5), fontsize=9.2)
-        #     ax.spines['right'].set_visible(False)
-        #     ax.spines['top'].set_visible(False)
-        #     ax.spines['left'].set_visible(False)
-        #     ax.spines['bottom'].set_visible(False)
             
         sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
         
@@ -212,8 +203,7 @@ def plot_latent(
     
     if i == 1 and legend:
         fig.legend(scatter, labels=unique_labels, bbox_to_anchor=(0.5, -0.05), loc='lower center', ncols=7)
-   
-          
+
     plt.tight_layout()
     fig.subplots_adjust(bottom=0.2)  
     
