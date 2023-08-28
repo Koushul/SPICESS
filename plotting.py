@@ -103,7 +103,7 @@ def plot_umap_grid(
         sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
         
         try:
-            _, name, desc = antibody_panel[antibody_panel.name==protein_names[ix]].values[0]
+            _, name, desc = antibody_panel[antibody_panel.name==protein_names[ix].replace('-A', '')].values[0]
         except Exception as e:
             print(protein_names[ix])
             raise e
