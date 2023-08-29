@@ -171,13 +171,13 @@ with st.spinner('Integrating reference...'):
     st.code(adata)
 
 
-with st.spinner('Featurizing...'):
-    gex = featurize(adata)
-    pex = featurize(pdata, clr=False)
-    d11 = adata.obsm['latent'].copy()
-    d12 = pex.features
+# with st.spinner('Featurizing...'):
+#     gex = featurize(adata)
+#     pex = featurize(pdata, clr=True)
+#     d11 = adata.obsm['latent'].copy()
+#     d12 = pex.features
     
-
+d11 = adata.obsm['latent']
 
 st.title(f'{tissue} (Human)')
 st.info(f'🧬 Reference sample has {adata.obsm["latent"].shape[0]} spots, {adata.shape[1]} genes, and {pdata.shape[1]} proteins.')
@@ -187,7 +187,7 @@ with st.spinner(f'Loading pre-trained model for...'):
     model.load_state_dict(torch.load(f'./notebooks/{tissue}_model.pth', map_location=torch.device('cpu')))
 
 perf, examples, upload = st.tabs(["Model Performance", "Examples", "Upload"])
-from PIL import Image
+
 with upload:
     st.file_uploader('Upload your own ST data', type='h5ad')
             
