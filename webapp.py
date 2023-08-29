@@ -25,7 +25,6 @@ from anndata import AnnData
 import matplotlib.pyplot as plt
 import numpy as np
 import umap.umap_ as cuml
-import matplotlib.pyplot as plt
 import seaborn as sns
 import time
 from utils import featurize
@@ -50,8 +49,8 @@ with st.expander('Antibody Panel'):
     
 @st.cache_data
 def load_data(tissue):
-    adata = sc.read_10x_h5(f'/ix/hosmanbeyoglu/kor11/CytAssist/{tissue}/GEX_PEX/filtered_feature_bc_matrix.h5', gex_only=False)
-    visium_ = sc.read_visium(path=f'/ix/hosmanbeyoglu/kor11/CytAssist/{tissue}/GEX_PEX/')
+    adata = sc.read_10x_h5(f'./{tissue}Tissue/GEX_PEX/filtered_feature_bc_matrix.h5', gex_only=False)
+    visium_ = sc.read_visium(path=f'./{tissue}Tissue/GEX_PEX/')
     adata.uns['spatial'] = visium_.uns['spatial']
     adata.obsm['spatial'] = visium_.obsm['spatial']
     adata.obsm['spatial'] = adata.obsm['spatial'].astype(float)
@@ -73,7 +72,7 @@ def load_data(tissue):
         
 # @st.cache_data
 def project(ix, adata_ref, tissue):
-    adata3 = sc.read_h5ad(f'/ix/hosmanbeyoglu/kor11/CytAssist/Breast/visium/patient_{ix}.h5ad')
+    adata3 = sc.read_h5ad(f'./data/patient_{ix}.h5ad')
     adata3.obs['source'] = f'Breast Sample {ix}'
     adata3.obs['domain_id'] = ix
     adata3.obs['source'] = adata3.obs['source'].astype('category')
