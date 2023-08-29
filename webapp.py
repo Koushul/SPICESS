@@ -2,20 +2,14 @@ import streamlit as st
 import sys
 import warnings
 
-from plotting import plot_latent, plot_umap_grid
 warnings.filterwarnings('ignore')
 sys.path.append('.')
 sys.path.append('./spicess')
 
 from spicess.vae_infomax import InfoMaxVAE
 import uniport as up
-from utils import featurize, train_test_split
-from plotting import plot_umap_grid, plot_latent
-from spicess.modules.losses import Metrics, Loss, NonSpatialLoss
-from early_stopping import EarlyStopping
+from utils import featurize
 from spicess.vae_infomax import InfoMaxVAE
-from spicess.vae_nonspatial import NonSpatialVAE
-from plotting import plot_umap_grid, plot_norm, plot_recons
 from sklearn.preprocessing import MinMaxScaler
 from streamlit_image_comparison import image_comparison
 
@@ -23,17 +17,14 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 import matplotlib.pyplot as plt
-import numpy as np
-import umap.umap_ as cuml
 import seaborn as sns
-import time
 from utils import featurize
 import torch
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+# from sklearn.decomposition import PCA
+# from sklearn.manifold import TSNE
 
 
-UMAP = cuml.UMAP
+# UMAP = cuml.UMAP
 
 st.set_page_config(layout="wide", page_icon='🌶️', page_title='SPICESS Web Portal')
 st.set_option('deprecation.showPyplotGlobalUse', False)
