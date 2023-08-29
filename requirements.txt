@@ -1,0 +1,3 @@
+umap-learn
+seaborn
+streamlit_image_comparison
