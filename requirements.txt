@@ -1,4 +1,4 @@
-umap-learn
+torch_geometric
 seaborn
 streamlit_image_comparison
 scanpy
