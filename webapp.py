@@ -18,7 +18,7 @@ import scanpy as sc
 from anndata import AnnData
 import matplotlib.pyplot as plt
 import seaborn as sns
-from utils import featurize
+from utils import graph_alpha
 import torch
 # from sklearn.decomposition import PCA
 # from sklearn.manifold import TSNE
@@ -231,7 +231,15 @@ def get_imputations(patient_id, tissue):
     clean_adata(a)
 
     gexa = featurize(a)
-    A = gexa.adj_norm.to_dense()
+    
+    adj = graph_alpha(a.obsm['spatial'], n_neighbors=12)
+    adj_label = adj + sp.eye(adj.shape[0])
+    adj_label = torch.tensor(adj_label.toarray())
+    pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum())
+    norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
+    adj_norm = preprocess_graph(adj)
+    
+    A = adj_norm.to_dense()
     d11a = torch.tensor(a.obsm['latent']).float()
     imputed_proteins, z = model.impute(d11a, A, return_z=True)                
     proteins_df = pd.DataFrame(imputed_proteins, index=a.obs.index, columns=pdata.var_names)
