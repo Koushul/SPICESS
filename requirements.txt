@@ -4,3 +4,4 @@ streamlit_image_comparison
 scanpy
 squidpy
 torch
+gudhi
