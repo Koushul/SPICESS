@@ -138,7 +138,7 @@ def graph_alpha(spatial_locs, n_neighbors=10):
 
     return nx.to_scipy_sparse_matrix(extended_graph, format='csr')
 
-def featurize(input_adata, neighbors=20, clr=False, normalize_total=True):
+def featurize(input_adata, neighbors=6, clr=False, normalize_total=True):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     varz = Namespace()
     features = input_adata.copy()
@@ -159,6 +159,7 @@ def featurize(input_adata, neighbors=20, clr=False, normalize_total=True):
 
     # adj = getA_knn(features.obsm['spatial'], neighbors)
     adj = graph_alpha(features.obsm['spatial'], n_neighbors=neighbors)
+    varz.adj_empty = adj
     adj_label = adj + sp.eye(adj.shape[0])
     adj_label = torch.tensor(adj_label.toarray()).to(device)
     pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()).to(device)
