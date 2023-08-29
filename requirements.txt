@@ -3,3 +3,4 @@ seaborn
 streamlit_image_comparison
 scanpy
 squidpy
+torch
