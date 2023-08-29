@@ -1,4 +1,5 @@
 torch_geometric
+networkx==2.8.8
 seaborn
 streamlit_image_comparison
 scanpy
