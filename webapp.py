@@ -26,7 +26,7 @@ import torch
 
 # UMAP = cuml.UMAP
 
-st.set_page_config(layout="wide", page_icon='🌶️', page_title='SPICESS Web Portal')
+st.set_page_config(layout="centered", page_icon='🌶️', page_title='SPICESS Web Portal')
 st.set_option('deprecation.showPyplotGlobalUse', False)
 
 st.title('Welcome to SPICESS!')
