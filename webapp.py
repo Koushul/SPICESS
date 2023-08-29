@@ -5,8 +5,21 @@ import warnings
 from plotting import plot_latent, plot_umap_grid
 warnings.filterwarnings('ignore')
 sys.path.append('.')
-import pandas as pd
+sys.path.append('./spicess')
+
+from spicess.vae_infomax import InfoMaxVAE
 import uniport as up
+from utils import featurize, train_test_split
+from plotting import plot_umap_grid, plot_latent
+from spicess.modules.losses import Metrics, Loss, NonSpatialLoss
+from early_stopping import EarlyStopping
+from spicess.vae_infomax import InfoMaxVAE
+from spicess.vae_nonspatial import NonSpatialVAE
+from plotting import plot_umap_grid, plot_norm, plot_recons
+from sklearn.preprocessing import MinMaxScaler
+from streamlit_image_comparison import image_comparison
+
+import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 import matplotlib.pyplot as plt
@@ -15,11 +28,11 @@ import umap.umap_ as cuml
 import matplotlib.pyplot as plt
 import seaborn as sns
 import time
-from modules.vae_infomax import InfoMaxVAE
 from utils import featurize
 import torch
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+
 
 UMAP = cuml.UMAP
 
@@ -95,37 +108,15 @@ def build_scaffold(tissue):
         genes = [g.strip() for g in f.readlines()]
     
     adata, pdata = load_data(tissue)
-    
     adata = adata[:, adata.var_names.isin(genes)]
-    
-    # adata6 = sc.read_h5ad('/ix/hosmanbeyoglu/kor11/CytAssist/Breast/visium/patient_6.h5ad')
-    # adata.var_names_make_unique()
-    # adata6.var_names_make_unique()
-    
     adata.obsm['spatial'] = adata.obsm['spatial'].astype(float)
-    # adata6.obsm['spatial'] = adata6.obsm['spatial'].astype(float)
     adata.obs['source'] = 'Breast CytAssist (Ref)'
     adata.obs['domain_id'] = 0
     adata.obs['source'] = adata.obs['source'].astype('category')
     adata.obs['domain_id'] = adata.obs['domain_id'].astype('category')
-    
-    # adata6.obs['source'] = 'Breast Sample 6'
-    # adata6.obs['domain_id'] = 6
-    # adata6.obs['source'] = adata6.obs['source'].astype('category')
-    # adata6.obs['domain_id'] = adata6.obs['domain_id'].astype('category')
-    # adata6.var_names = adata6.var.feature_name.values
-    # adata_cm = AnnData.concatenate(adata, adata6, join='inner')
-    # sc.pp.normalize_total(adata_cm)
-    # sc.pp.log1p(adata_cm)
-    # sc.pp.highly_variable_genes(adata_cm, n_top_genes=5000, inplace=False, subset=True)
-    # up.batch_scale(adata_cm)
-    # adata = adata_cm[adata_cm.obs.domain_id==0]
-    # adata6 = adata_cm[adata_cm.obs.domain_id==6]
-    
+
     sc.pp.normalize_total(adata)
     sc.pp.log1p(adata)
-    
-    
     
     return adata, pdata
 
@@ -167,6 +158,9 @@ with st.spinner('Loading Reference Scaffold...'):
     pdata.obsm['spatial'] = adata.obsm['spatial']
     pdata.raw = pdata
     pdata.X = pdata.X.astype(float)
+    columns = list(pdata.to_df().columns)
+    columns[columns.index('PTPRC')] = 'PTPRC-A'
+    pdata.var_names = columns   
 
 with st.spinner('Integrating reference...'):
     adata_cyt = up.Run(name=tissue, 
@@ -199,18 +193,25 @@ st.title(f'{tissue} (Human)')
 st.info(f'🧬 Reference sample has {adata.obsm["latent"].shape[0]} spots, {adata.shape[1]} genes, and {pdata.shape[1]} proteins.')
 
 with st.spinner(f'Loading pre-trained model for...'):
-    model = InfoMaxVAE([d11.shape[1], pdata.shape[1]], latent_dim=64, encoder_dim=64)
+    model = InfoMaxVAE([d11.shape[1], pdata.shape[1]], latent_dim=16, dropout=0.1)
     model.load_state_dict(torch.load(f'./notebooks/{tissue}_model.pth', map_location=torch.device('cpu')))
 
 perf, examples, upload = st.tabs(["Model Performance", "Examples", "Upload"])
-
+from PIL import Image
 with upload:
     st.file_uploader('Upload your own ST data', type='h5ad')
             
 
 with perf:
+    st.image(f'{tissue}_predictions.png', use_column_width=True)
+    
+    with st.expander('Show embeddings'):
+        st.caption('Embeddings alignment results during training')
+        st.image(f'{tissue}_alignment.png', use_column_width=True)
+        
     with st.expander('View Model Architechture'):
         st.code(model)
+        
         
 
 
@@ -229,143 +230,104 @@ sample_shapes = [
     (10, (2473, 36503))
 ]
 
+@st.cache_data
+def get_imputations(patient_id, tissue):     
+    a = project(
+            patient_id, 
+            adata_ref=adata, 
+            tissue=tissue
+        ) 
+            
+    clean_adata(a)
+
+    gexa = featurize(a)
+    A = gexa.adj_norm.to_dense()
+    d11a = torch.tensor(a.obsm['latent']).float()
+    imputed_proteins, z = model.impute(d11a, A, return_z=True)                
+    proteins_df = pd.DataFrame(imputed_proteins, index=a.obs.index, columns=pdata.var_names)
+    
+    return proteins_df, a, z
 
 with examples:
-    sel, run = st.columns(2)
-    # sample_ids = sel.multiselect('Select tissue samples (10)', list(range(1, 11)))
-    color_by = sel.selectbox('Color by', ['author_cell_type', 'cell_type'])
-    
+    st.header('Built-in examples')
+
     cols = st.columns(5)
-    sample_ids = [cols[0].checkbox(f'Sample {x}') for x in range(1, 6)] +\
-        [cols[1].checkbox(f'Sample {x}') for x in range(6, 11)]
+    sample_ids = \
+        [cols[0].checkbox(f'Sample {x} (n={sample_shapes[x-1][1][0]})') for x in range(1, 3)] +\
+        [cols[1].checkbox(f'Sample {x} (n={sample_shapes[x-1][1][0]})') for x in range(3, 5)] +\
+        [cols[2].checkbox(f'Sample {x} (n={sample_shapes[x-1][1][0]})') for x in range(5, 7)] +\
+        [cols[3].checkbox(f'Sample {x} (n={sample_shapes[x-1][1][0]})') for x in range(7, 9)] +\
+        [cols[4].checkbox(f'Sample {x} (n={sample_shapes[x-1][1][0]})') for x in range(9, 11)]
+            
         
     sample_ids = [x+1 for x, y in enumerate(sample_ids) if y]
 
-    if len(sample_ids) > 0:
-        plots = st.columns(len(sample_ids))
+    st.divider()
 
-    
-    if st.button(f'🔗 Integrate & Run', disabled=len(sample_ids) == 0):
-    
-        with st.spinner('Integrating...'):
-
-            start = time.perf_counter()
-                
-            aout = [project(
-                        idx, 
-                        adata_ref=adata, 
-                        tissue=tissue) 
-                    for idx in sample_ids]
-                
-        st.success(f'Integration completed in {((time.perf_counter()-start)/60.0):.2f} minutes.')
-
+    a, b, c = st.columns(3)
+    resolution = a.slider('Clustering resolution', 0.1, 1.0, step=0.05, value=0.5)
+    alpha = b.slider('Transparency', 0.1, 1.0, step=0.1, value=0.9)
+    size = c.slider('Spot Size', 0.1, 5.0, step=0.1, value=1.5)
         
-        for a in aout:
-            clean_adata(a)
-            st.code(a)
+    ix = 1
+    a, b, c = st.columns(3)
+    image_type = a.selectbox('Left', list(pdata.var_names)+['Proteins', 'cell_type', 'author_cell_type', None], key=f'{ix}_image_1', index=33)  
+    image_type2 = b.selectbox('Right', list(pdata.var_names)+['Proteins', 'cell_type', 'author_cell_type', None], key=f'{ix}_image_2', index=31)  
+    
+    ct = c.selectbox('Markers', antibody_panel.cell_type.unique())
+    
+    st.code(f'{ct}: {antibody_panel[antibody_panel.cell_type==ct].name.values}')
+    
+    for ix in sample_ids:            
+        
+        proteins, sample6, z = get_imputations(ix, tissue)
+        
+        
+        scaler = MinMaxScaler()
+        proteins_norm = pd.DataFrame(scaler.fit_transform(proteins), columns=proteins.columns)
+        pdata2 = AnnData(proteins_norm)
+        pdata2.uns['spatial'] = sample6.uns['spatial']
+        pdata2.obsm['spatial'] = sample6.obsm['spatial']
+        pdata2.obs['cell_type'] = sample6.obs['cell_type'].values
+        pdata2.obs['author_cell_type'] = sample6.obs['author_cell_type'].values
+                    
+        with st.spinner(f'🎨 Segmenting...'):
+            
+            sc.pp.neighbors(pdata2)
+            sc.tl.leiden(pdata2, resolution=resolution)
+            a = AnnData(z)
+            sc.pp.neighbors(a)
+            sc.tl.leiden(a, resolution=resolution)
+            pdata2.obs['latent'] = a.obs.leiden.values
+            
+            if 'leiden_colors' in pdata2.uns: pdata2.uns.pop('leiden_colors');
+            if 'latent_colors' in pdata2.uns: pdata2.uns.pop('latent_colors');
+            pdata2.obs['Proteins'] = pdata2.obs['leiden'].astype('category')
+            
 
-            with st.spinner('Imputing Surface Proteins...'):              
-                gexa = featurize(a)
-                A = gexa.adj_norm.to_dense()
-                d11a = torch.tensor(a.obsm['latent']).float()
-                imputed_proteins = model.impute(d11a, A)
-                
-                enc, _, _ = model.encoders[0].forward(d11a, A.nonzero().t().contiguous())
-                z = model.fc_mus[0](enc, A).detach().numpy()
+            sq.pl.spatial_scatter(
+                pdata2, color=image_type2, ncols=1, dpi=180, size=size, alpha=alpha,
+                save = f'/tmp/patient_{ix}_regions_blank.png', 
+                legend_loc=False, colorbar=False,
+                figsize=(5, 5), frameon=False, palette='Set1',
+                title='')
             
-            left, right = st.columns(2)
-            with st.spinner(f'Plotting UMAPs...'):   
-                
-                # embeddings = UMAP(n_components=2, n_neighbors=200, min_dist=0.1, random_state=42).fit_transform(z)
-                embeddings = UMAP(n_components=2, n_neighbors=200, min_dist=0.1, random_state=42).fit_transform(imputed_proteins)
-                
-                
-                plot_umap_grid(embeddings, imputed_proteins, pdata.var_names, None, size=50)
-                st.pyplot(transparent=True, dpi=180)
-                
-                # plot_umap_grid(embeddings, a.to_df()[pdata.var_names].values, pdata.var_names, None, size=50)
-                # st.pyplot(transparent=True, dpi=180)
-                
-            st.markdown('---')
+            sq.pl.spatial_scatter(
+                pdata2, color=image_type, ncols=1, dpi=180, size=size, alpha=alpha,
+                save = f'/tmp/patient_{ix}_regions.png', 
+                legend_loc=False,colorbar=False,
+                figsize=(5, 5), frameon=False, edgecolor=None, palette='Dark2',
+                title='')
             
-            f, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=180)
             
-            scatter = sns.scatterplot(
-                embeddings[:, 0], 
-                embeddings[:, 1], 
-                hue=a.obs[color_by], 
-                s=50, 
-                edgecolor='black', 
-                palette='Dark2',
-                legend=True,
-                ax = ax
+            image_comparison(
+                img1=f'/tmp/patient_{ix}_regions.png',
+                img2=f'/tmp/patient_{ix}_regions_blank.png',
+                label1=image_type or 'Tissue',
+                label2=image_type2 or 'Tissue',
+                # width=750,
+                starting_position=50,
+                show_labels=True,
+                make_responsive=True,
+                in_memory=True,
             )
-            
-            ax.set_title('UMAP')
-            ax.legend(ncols=2, loc='lower center', scatterpoints=1, fontsize=6, bbox_to_anchor=(0.5, -0.35))
-            
-            
-            # fig = plt.gcf()
-            # plt.axis('off')
-            # plt.grid(b=None)
-            right.pyplot(f, transparent=True, dpi=180)
-            
-            
-            ix = a.obs.domain_id.unique()[0]
-            
-            adata_tmp = sc.read_h5ad(f'/ix/hosmanbeyoglu/kor11/CytAssist/Breast/visium/patient_{ix}.h5ad')
-            
-            f, ax = plt.subplots(1, 1, figsize=(4, 4), dpi=180)
-            sq.pl.spatial_scatter(adata_tmp, color=color_by, ax=ax, legend_loc=None, title='ST Data',
-                    palette='Dark2', size=1.55, edgecolor='black', frameon=False, linewidth=0.35,figsize=(4, 4))
-            left.pyplot(f, transparent=True, dpi=180)
-        
-            
-            
-        
-        # with st.spinner('Plotting Integration Results...'):
-        #     adata_all = AnnData.concatenate(*aout+[adata_cyt])
-        #     red = cuml.UMAP(
-        #         n_components=2,
-        #         n_neighbors=100,
-        #         min_dist=.1,
-        #     )
-        #     red.fit(adata_all[adata_all.obs.domain_id==0].obsm['latent'])
-
-        #     plots = st.columns(len(sample_ids))
-            # targets = adata_all[adata_all.obs.domain_id==0]
-            # plot_data = red.transform(targets.obsm['project'])
-            # scatter = sns.scatterplot(
-            #     plot_data[:, 0], 
-            #     plot_data[:, 1], 
-            #     color='red', 
-            #     s=30, 
-            #     legend=False, 
-            #     edgecolor='white', 
-            # )
-                
-            # fig = plt.gcf()
-            # plt.axis('off')
-            # plt.grid(b=None)
-            # plots[0].pyplot(fig, transparent=True)
-                
-            # for ix, plot in zip(sample_ids, plots):
-            #     targets = adata_all[adata_all.obs.domain_id==ix]
-            #     plot_data = red.transform(targets.obsm['project'])
-            #     scatter = sns.scatterplot(
-            #         plot_data[:, 0], 
-            #         plot_data[:, 1], 
-            #         hue=targets.obs.author_cell_type, 
-            #         s=30, 
-            #         legend=False, 
-            #         edgecolor='black', 
-            #         palette='Dark2'
-            #     )
-                
-
-                
-            #     fig = plt.gcf()
-            #     plt.axis('off')
-            #     plt.grid(b=None)
-            #     plot.pyplot(fig, transparent=True)
-            

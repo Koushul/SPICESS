@@ -104,7 +104,6 @@ class InfoMaxVAE(nn.Module):
                 nn.Dropout(dropout),
                 nn.Linear(2*dim1, dim1),
             ), 
-
             nn.Sequential(
                 nn.Linear(latent_dim, dim2),
                 nn.BatchNorm1d(dim2),
@@ -133,7 +132,9 @@ class InfoMaxVAE(nn.Module):
 
     def refactor(self, X, A):
         index = range(2)
-        zs = []; mus = []; logvars = []
+        zs = []
+        mus = []
+        logvars = []
         for x, i in zip(X, index):
             mu = self.fc_mus[i](x)
             logvar = self.fc_vars[i](x)
@@ -158,6 +159,7 @@ class InfoMaxVAE(nn.Module):
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(2)]
+    
     
     
 
