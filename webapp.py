@@ -40,8 +40,8 @@ with st.expander('Antibody Panel'):
     
 @st.cache_data
 def load_data(tissue):
-    adata = sc.read_10x_h5(f'./{tissue}Tissue/GEX_PEX/filtered_feature_bc_matrix.h5', gex_only=False)
-    visium_ = sc.read_visium(path=f'./{tissue}Tissue/GEX_PEX/')
+    adata = sc.read_10x_h5(f'./data/{tissue}Tissue/GEX_PEX/filtered_feature_bc_matrix.h5', gex_only=False)
+    visium_ = sc.read_visium(path=f'./data/{tissue}Tissue/GEX_PEX/')
     adata.uns['spatial'] = visium_.uns['spatial']
     adata.obsm['spatial'] = visium_.obsm['spatial']
     adata.obsm['spatial'] = adata.obsm['spatial'].astype(float)
@@ -63,7 +63,7 @@ def load_data(tissue):
         
 # @st.cache_data
 def project(ix, adata_ref, tissue):
-    adata3 = sc.read_h5ad(f'./data/patient_{ix}.h5ad')
+    adata3 = sc.read_h5ad(f'./data/{tissue}Tissue/Kumar_et_al_2023/patient_{ix}.h5ad')
     adata3.obs['source'] = f'Breast Sample {ix}'
     adata3.obs['domain_id'] = ix
     adata3.obs['source'] = adata3.obs['source'].astype('category')
