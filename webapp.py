@@ -8,10 +8,11 @@ sys.path.append('./spicess')
 import numpy as np
 from spicess.vae_infomax import InfoMaxVAE
 import uniport as up
-from utils import featurize
+from utils import featurize, preprocess_graph, graph_alpha
 from spicess.vae_infomax import InfoMaxVAE
 from sklearn.preprocessing import MinMaxScaler
 from streamlit_image_comparison import image_comparison
+import scipy.sparse as sp
 
 import pandas as pd
 import scanpy as sc
