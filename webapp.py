@@ -191,7 +191,7 @@ with st.spinner(f'Loading pre-trained model for...'):
     model.load_state_dict(torch.load(f'./notebooks/{tissue}_model.pth', map_location=torch.device('cpu')))
 
 st.caption('Upload data to analyze or use available examples.')
-upload, examples  = st.tabs(["Model Performance", "Examples", "Upload"])
+upload, examples  = st.tabs(["Upload", "Examples"])
 
 with upload:
     st.file_uploader('Upload your own ST data', type='h5ad', help='ST AnnData objects only.')
