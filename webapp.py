@@ -224,7 +224,7 @@ sample_shapes = [
     (10, (2473, 36503))
 ]
 
-@st.cache_data
+# @st.cache_data
 def get_imputations(patient_id, tissue):     
     a = project(
             patient_id, 
