@@ -70,9 +70,9 @@ def project(ix, adata_ref, tissue):
     adata3.obs['source'] = adata3.obs['source'].astype('category')
     adata3.obs['domain_id'] = adata3.obs['domain_id'].astype('category')
     
-    sc.pp.normalize_total(adata3)
-    sc.pp.log1p(adata3)
-    up.batch_scale(adata3)
+    # sc.pp.normalize_total(adata3)
+    # sc.pp.log1p(adata3)
+    # up.batch_scale(adata3)
     
     adata3.var_names = adata3.var.feature_name.values
     
