@@ -117,8 +117,7 @@ def build_scaffold(tissue):
 
 
 cols = st.columns(3)
-# tissue = cols[0].selectbox('Select tissue (3)', ['Breast', 'Tonsil', 'Brain'])
-tissue = st.radio('Load pre-trained model for which tissue?', ['Breast', 'Tonsil', 'Brain'], horizontal=True)
+tissue = st.radio('Select Tissue', ['Breast', 'Tonsil', 'Brain'], horizontal=True)
 
 
 def clean_adata(adata):
@@ -232,16 +231,14 @@ def get_imputations(patient_id, tissue):
             adata_ref=adata, 
             tissue=tissue
         ) 
+    st.success('Projection complete.')
             
     clean_adata(a)
 
-    gexa = featurize(a)
     
     adj = graph_alpha(a.obsm['spatial'], n_neighbors=12)
     adj_label = adj + sp.eye(adj.shape[0])
     adj_label = torch.tensor(adj_label.toarray())
-    pos_weight = torch.tensor(float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum())
-    norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
     adj_norm = preprocess_graph(adj)
     
     A = adj_norm.to_dense()
