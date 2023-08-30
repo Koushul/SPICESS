@@ -91,7 +91,7 @@ def project(ix, adata_ref, tissue):
     # adata3.obsm['latent'] = adata_new[adata_new.obs.domain_id==ix].obsm['project']
     # adata3.obsm['project'] = adata_new[adata_new.obs.domain_id==ix].obsm['project']
     
-    adata3.obsm['latent'] = adata3.obsm['project'] = np.load(f'./data/{tissue}Tissue/preprocessed/project_{ix}.npy')
+    adata3.obsm['latent'] = adata3.obsm['project'] = np.load(f'./data/{tissue}Tissue/preprocessed/projected_{ix}.npy')
     
     return adata3
 
