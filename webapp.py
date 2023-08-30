@@ -190,21 +190,22 @@ with st.spinner(f'Loading pre-trained model for...'):
     model = InfoMaxVAE([d11.shape[1], pdata.shape[1]], latent_dim=16, dropout=0.1)
     model.load_state_dict(torch.load(f'./notebooks/{tissue}_model.pth', map_location=torch.device('cpu')))
 
-perf, examples, upload = st.tabs(["Model Performance", "Examples", "Upload"])
+st.caption('Upload data to analyze or use available examples.')
+upload, examples  = st.tabs(["Model Performance", "Examples", "Upload"])
 
 with upload:
-    st.file_uploader('Upload your own ST data', type='h5ad')
+    st.file_uploader('Upload your own ST data', type='h5ad', help='ST AnnData objects only.')
             
 
-with perf:
-    st.image(f'{tissue}_predictions.png', use_column_width=True)
+# with perf:
+#     st.image(f'{tissue}_predictions.png', use_column_width=True)
     
-    with st.expander('Show embeddings'):
-        st.caption('Embeddings alignment results during training')
-        st.image(f'{tissue}_alignment.png', use_column_width=True)
+#     with st.expander('Show embeddings'):
+#         st.caption('Embeddings alignment results during training')
+#         st.image(f'{tissue}_alignment.png', use_column_width=True)
         
-    with st.expander('View Model Architechture'):
-        st.code(model)
+#     with st.expander('View Model Architechture'):
+#         st.code(model)
         
         
 
