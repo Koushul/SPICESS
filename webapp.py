@@ -5,7 +5,7 @@ import warnings
 warnings.filterwarnings('ignore')
 sys.path.append('.')
 sys.path.append('./spicess')
-
+import numpy as np
 from spicess.vae_infomax import InfoMaxVAE
 import uniport as up
 from utils import featurize
@@ -77,18 +77,21 @@ def project(ix, adata_ref, tissue):
     
     st.success(f'Sample {ix} has {adata3.shape[0]} spots and {adata3.shape[1]} genes.')
     
-    adata_cm = AnnData.concatenate(adata3, adata_ref, join='inner')
-    adata_new = up.Run(
-        name=tissue, 
-        adatas=[adata3, adata_ref], 
-        adata_cm =adata_cm, 
-        lambda_s=1.0, 
-        out='project', 
-        ref_id=1, 
-        outdir='./notebooks/output'
-    )
-    adata3.obsm['latent'] = adata_new[adata_new.obs.domain_id==ix].obsm['project']
-    adata3.obsm['project'] = adata_new[adata_new.obs.domain_id==ix].obsm['project']
+    # adata_cm = AnnData.concatenate(adata3, adata_ref, join='inner')
+    # adata_new = up.Run(
+    #     name=tissue, 
+    #     adatas=[adata3, adata_ref], 
+    #     adata_cm =adata_cm, 
+    #     lambda_s=1.0, 
+    #     out='project', 
+    #     ref_id=1, 
+    #     outdir='./notebooks/output'
+    # )
+    # adata3.obsm['latent'] = adata_new[adata_new.obs.domain_id==ix].obsm['project']
+    # adata3.obsm['project'] = adata_new[adata_new.obs.domain_id==ix].obsm['project']
+    
+    adata3.obsm['latent'] = adata3.obsm['project'] = np.load(f'./data/{tissue}Tissue/preprocessed/project_{ix}.npy')
+    
     return adata3
 
 @st.cache_data
