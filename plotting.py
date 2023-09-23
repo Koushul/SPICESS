@@ -146,6 +146,11 @@ def plot_latent(
     colors=None,
     size=100,
     fmt='svg',
+    learning_rate=1.0,
+    min_dist=0.1,
+    spread=1.0,
+    local_connectivity=1.0,
+    repulsion_strength=1.0,
 ):
     method_names = {'pca': 'PC', 'umap': 'UMAP'}
     axs = []
@@ -163,7 +168,11 @@ def plot_latent(
             red = cuml.UMAP(
                 n_components=n_components,
                 n_neighbors=min(200, dat.shape[0] - 1) if n_neighbors is None else n_neighbors,
-                min_dist=.5,
+                learning_rate=1.0,
+                min_dist=0.1,
+                spread=1.0,
+                local_connectivity=1.0,
+                repulsion_strength=1.0,
                 random_state=42)
             if separate_dim:
                 red.fit(dat)
