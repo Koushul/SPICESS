@@ -256,3 +256,28 @@ def select_points_for_concentric_circles(points, center, inner_radius, outer_rad
         if inner_radius <= distance_from_center <= outer_radius:
             selected_points.append(point)
     return selected_points
+
+
+def clean_adata(adata):
+    for v in ['mt', 'n_cells_by_counts', 'mean_counts', 'log1p_mean_counts', 'pct_dropout_by_counts', 'total_counts', 'log1p_total_counts', 
+        'gene_ids', 'feature_types', 'genome', 'mt-0', 'n_cells_by_counts-0',
+        'mean_counts-0', 'log1p_mean_counts-0', 'pct_dropout_by_counts-0',
+        'total_counts-0', 'log1p_total_counts-0', 'gene_ids-0', 'feature_types-0', 'genome-0', 'feature_is_filtered-1', 
+        'feature_name-1', 'feature_reference-1', 'feature_biotype-1', 'highly_variable', 'means', 'dispersions', 'dispersions_norm']:
+        if v in adata.var.columns:
+            del adata.var[v]
+        
+    for o in ['log1p_total_counts', 'mapped_reference_assembly', 'mapped_reference_annotation', 
+        'alignment_software', 'donor_id', 'self_reported_ethnicity_ontology_term_id', 'donor_living_at_sample_collection', 
+        'donor_menopausal_status', 'organism_ontology_term_id', 'sample_uuid', 'sample_preservation_method', 'tissue_ontology_term_id', 
+        'development_stage_ontology_term_id', 'sample_derivation_process', 'sample_source', 'donor_BMI_at_collection', 
+        'tissue_section_uuid', 'tissue_section_thickness', 'library_uuid', 'assay_ontology_term_id', 'sequencing_platform', 
+        'is_primary_data', 'cell_type_ontology_term_id', 'disease_ontology_term_id', 'sex_ontology_term_id', 
+        'nCount_Spatial', 'nFeature_Spatial', 'nCount_SCT', 'nFeature_SCT', 
+        'suspension_type', 'tissue', 
+        'self_reported_ethnicity', 'development_stage', 'n_genes_by_counts', 'log1p_n_genes_by_counts', 'total_counts',
+        'pct_counts_in_top_50_genes', 'pct_counts_in_top_100_genes',
+        'pct_counts_in_top_200_genes', 'pct_counts_in_top_500_genes',
+        'total_counts_mt', 'log1p_total_counts_mt', 'pct_counts_mt']:
+        if o in adata.obs.columns:
+            del adata.obs[o]
