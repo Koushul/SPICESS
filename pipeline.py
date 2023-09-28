@@ -67,6 +67,9 @@ class IntegrateDatasetPipeline(Pipeline):
         self.adata = self.adata_cm[self.adata_cm.obs.domain_id==self.cat_a]
         self.adata2 = self.adata_cm[self.adata_cm.obs.domain_id==self.cat_b]
         
+        print('Created data integration pipeline.')
+        
+        
     def run(self) -> Tuple[AnnData, AnnData]:
         adata_cm = AnnData.concatenate(self.adata.copy(), self.adata2.copy(), join='inner')
         adata_cyt = up.Run(
@@ -89,6 +92,9 @@ class LoadVisiumPipeline(Pipeline):
         self.visium_dir = visium_dir
         self.sample_id = sample_id
         
+        print('Created 10x Visium data loader pipeline.')
+        
+        
     def run(self):
         adata3 = sc.read_visium(path=self.visium_dir)
         adata3.obsm['spatial'] = adata3.obsm['spatial'].astype(float)
@@ -103,7 +109,9 @@ class LoadVisiumPipeline(Pipeline):
         
         return adata3
                 
+    
 class LoadCytAssistPipeline(Pipeline):
+
     def __init__(self, 
             tissue: str, h5_file: str, geneset: str, 
             sample_id: int, name: str, 
@@ -116,6 +124,9 @@ class LoadCytAssistPipeline(Pipeline):
         self.name = name
         with open(geneset, 'r') as f:
             self.geneset = [g.strip() for g in f.readlines()]
+            
+        print('Created CytAssist data loader pipeline.')
+        
         
     def load_data(self, h5_file: str, ) -> Tuple[AnnData, AnnData]:
         adata = sc.read_10x_h5(h5_file, gex_only=False)
@@ -263,6 +274,8 @@ class TrainModelPipeline(Pipeline):
         
         self.metrics = Metrics(track=False)
         
+        print('Created training pipeline.')
+        
     def pre_process_inputs(self, adata, pdata, neighbors=6, layer='latent'):
         gex = featurize(adata, neighbors=neighbors)
         pex = featurize(pdata, neighbors=neighbors, clr=True)
@@ -283,9 +296,6 @@ class TrainModelPipeline(Pipeline):
         d12 = floatify(pex.features)
         d13 = floatify(gex_eval.features)
         d14 = floatify(pex_eval.features)
-        
-        
-        print(d11.shape, d12.shape, d13.shape, d14.shape)
         
         model = InfoMaxVAE([d11.shape[1], d12.shape[1]], latent_dim=self.latent_dim, dropout=self.dropout).cuda()
         es = EarlyStopping(model, patience=self.patience, verbose=False, delta=self.delta)
