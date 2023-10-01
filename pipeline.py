@@ -16,6 +16,9 @@ import numpy as np
 from scipy.stats import spearmanr
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score
+from datetime import datetime
+import yaml
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 floatify = lambda x: torch.tensor(x).cuda().float()
 
@@ -44,9 +47,6 @@ class Pipeline:
         raise NotImplementedError
         
     def save(self):
-        raise NotImplementedError
-        
-    def train(self):
         raise NotImplementedError
 
     def run(self):
@@ -77,7 +77,8 @@ class IntegrateDatasetPipeline(Pipeline):
             adatas=[adata_cm], 
             adata_cm =adata_cm, 
             lambda_s=1.0, 
-            out='project', 
+            out='project',
+            outdir='/ihome/hosmanbeyoglu/kor11/tools/SPICESS/workshop/output',
             ref_id=1)
         adata_cyt.obsm['latent'] = adata_cyt.obsm['project']
         adata = adata_cyt[adata_cyt.obs.domain_id==self.cat_a]
@@ -172,6 +173,21 @@ class LoadCytAssistPipeline(Pipeline):
     def __call__(self):
         return self.run()
 
+
+# class InferencePipeline(Pipeline):
+    
+#     def __init__(self, tissue: str, model: InfoMaxVAE):
+#         super().__init__()
+#         self.tissue = tissue
+#         self.model = InfoMaxVAE([d11.shape[1], d12.shape[1]], latent_dim=self.latent_dim, dropout=self.dropout).cuda()
+
+                
+#         print('Created inference pipeline.')
+
+
+
+
+
 class TrainModelPipeline(Pipeline):
     """
     Pipeline for training a model using matched spatial gene expression and protein expression data.
@@ -220,7 +236,9 @@ class TrainModelPipeline(Pipeline):
         Weight for protein expression mutual information loss. Defaults to 1e-3.
         
     """
+    
     def __init__(self, 
+            tissue,
             adata: AnnData, 
             pdata: AnnData,
             adata_eval: AnnData ,
@@ -244,6 +262,7 @@ class TrainModelPipeline(Pipeline):
             mutual_pex: float = 1e-3
         ):
         super().__init__()
+        self.tissue = tissue
         self.adata = adata
         self.pdata = pdata
         self.epochs = epochs
@@ -255,7 +274,6 @@ class TrainModelPipeline(Pipeline):
         self.delta = delta
         self.lr = lr
         self.wd = wd
-        
         
         self.loss_func = Loss(max_epochs=epochs)
 
@@ -272,10 +290,38 @@ class TrainModelPipeline(Pipeline):
             'mutual_pex': mutual_pex    
         }
         
-        self.metrics = Metrics(track=False)
+        self.metrics = Metrics(track=True)
+        
+        assert self.adata.shape[0] == self.pdata.shape[0], 'adata and pdata must have the same number of spots.'
+        
+        self.artifacts = Namespace(
+            tissue=self.tissue,
+            nspots = self.adata.shape[0],
+            ngenes=self.adata.shape[1],
+            nproteins=self.pdata.X.shape[1],
+            epochs=self.epochs,
+            latent_dim=self.latent_dim,
+            dropout=self.dropout,
+            patience=self.patience,
+            delta=self.delta,
+            lr=self.lr,
+            wd=self.wd,
+            kl_gex=self.loss_func.alpha['kl_gex'],
+            kl_pex=self.loss_func.alpha['kl_pex'],
+            recons_gex=self.loss_func.alpha['recons_gex'],
+            recons_pex=self.loss_func.alpha['recons_pex'],
+            cosine_gex=self.loss_func.alpha['cosine_gex'],
+            cosine_pex=self.loss_func.alpha['cosine_pex'],
+            adj=self.loss_func.alpha['adj'],
+            spatial=self.loss_func.alpha['spatial'],
+            mutual_gex=self.loss_func.alpha['mutual_gex'],
+            mutual_pex=self.loss_func.alpha['mutual_pex']
+        )
         
         print('Created training pipeline.')
-        
+    
+    
+
     def pre_process_inputs(self, adata, pdata, neighbors=6, layer='latent'):
         gex = featurize(adata, neighbors=neighbors)
         pex = featurize(pdata, neighbors=neighbors, clr=True)
@@ -300,6 +346,8 @@ class TrainModelPipeline(Pipeline):
         model = InfoMaxVAE([d11.shape[1], d12.shape[1]], latent_dim=self.latent_dim, dropout=self.dropout).cuda()
         es = EarlyStopping(model, patience=self.patience, verbose=False, delta=self.delta)
         optimizer = optim.Adam(model.parameters(), lr=self.lr, weight_decay=self.wd)
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=80, verbose=False)
+
         
         test_acc = 0
         losses = []
@@ -335,7 +383,10 @@ class TrainModelPipeline(Pipeline):
                 imputed_proteins = model.impute(d13, A2)
                 oracle_corr = np.mean(column_corr(test_protein, imputed_proteins))
                 self.metrics.update_value('oracle', oracle_corr, track=True)
-                test_acc = self.transfer_accuracy(evalo.gex_z.detach().cpu().numpy(), evalo.pex_z.detach().cpu().numpy(), refLabels)
+                test_acc = self.transfer_accuracy(
+                    evalo.gex_z.detach().cpu().numpy(), 
+                    evalo.pex_z.detach().cpu().numpy(), 
+                    refLabels)
                 self.metrics.update_value('test_acc', test_acc, track=True)      
                 
                 es(1-self.metrics.means.oracle, model)
@@ -343,16 +394,32 @@ class TrainModelPipeline(Pipeline):
                     model = es.best_model
                     break
                 
+                # scheduler.step(1-self.metrics.means.oracle)
+                
                 _alignment = self.metrics.means.test_acc
                 _imputation = self.metrics.means.oracle
                 _loss = np.mean(losses)
+                lr = scheduler.optimizer.param_groups[0]['lr']
                 
                 pbar.update()        
-                pbar.set_description(f'Imputation: {_alignment:.3f} || Alignment: {_imputation:.3f}% | Loss: {_loss:.3g}')  
+                pbar.set_description(
+                    f'Imputation: {_alignment:.3f} || Alignment: {_imputation:.3f}% | Loss: {_loss:.3g} | lr: {lr:.1e}'
+                )  
                 pbar.set_postfix({'es-counter': es.counter+1})
+                
+
+                
 
         model = es.best_model
-
+        model.eval()
+        ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
+        name = f'{self.tissue}_{ts}'
+        torch.save(model.state_dict(), f'../model_zoo/model_{name}.pth')
+        with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
+            yaml.dump(vars(self.artifacts), f)
+        pd.DataFrame(self.metrics.values.__dict__).to_csv(f'../model_zoo/kpi_{name}.csv', index=False)
+        
+    
         output = Namespace()
         output.model = model
         output.d11 = d11

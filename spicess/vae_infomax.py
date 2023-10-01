@@ -10,14 +10,6 @@ from .modules.graph import GraphConvolution
 from .modules.inner_product import InnerProductDecoder
 from .modules.infomax import ContrastiveGraph
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def sparse_mx_to_torch_edge_list(sparse_mx):
-    sparse_mx = sparse_mx.tocoo().astype(np.float32)
-    edge_list = torch.from_numpy(
-        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
-    return edge_list
-
 class GraphEncoder(nn.Module):
     def __init__(self, in_channels, hidden_channels):
         super(GraphEncoder, self).__init__()
@@ -35,8 +27,6 @@ class GraphEncoder(nn.Module):
     
 def corruption(x, edge_index):
     return x[torch.randperm(x.size(0))], edge_index
-
-
 
 class InfoMaxVAE(nn.Module):
     def __init__(
@@ -121,15 +111,12 @@ class InfoMaxVAE(nn.Module):
             dropout=dropout, 
             act=lambda x: x)
 
-        
-
     def encode(self, X, A):
         edge_index = A.nonzero().t().contiguous()
         gex_pos_z, gex_neg_z, gex_summary = self.encoders[0](X[0], edge_index)
         pex_pos_z, pex_neg_z, pex_summary = self.encoders[1](X[1], edge_index)                
         return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
         
-
     def refactor(self, X, A):
         index = range(2)
         zs = []
@@ -156,13 +143,9 @@ class InfoMaxVAE(nn.Module):
         mZ = 0.5*(Z[0] + Z[1])        
         return [mZ, mZ]
 
-
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(2)]
     
-    
-    
-
     def forward(self, X, A):
         output = Namespace()
         
@@ -190,29 +173,14 @@ class InfoMaxVAE(nn.Module):
 
         return output
     
-    
     def enable_dropout(self):
         """ Function to enable the dropout layers during test-time """
         for m in self.modules():
             if m.__class__.__name__.startswith('Dropout'):
                 m.train()
     
-    
     @torch.no_grad()
     def impute(self, X, adj, enable_dropout=False, return_z=False):
-        """
-        Impute surface protein expression from gene expression and spatial information.
-
-        Args:
-            X (torch.Tensor): Gene expression matrix.
-            adj (torch.Tensor): Adjacency matrix.
-            enable_dropout (bool, optional): Enable dropout during imputation to calculate uncertainities. Defaults to False.
-            return_z (bool, optional): Also return the latent embeddings. Defaults to False.
-
-        Returns:
-            numpy.ndarray: Imputed protein expression matrix.
-            (optional) numpy.ndarray: Latent embeddings z.
-        """
         self.eval()
         if enable_dropout:
             self.enable_dropout()
@@ -224,5 +192,3 @@ class InfoMaxVAE(nn.Module):
             return decoded.cpu().numpy(), z.cpu().numpy()       
             
         return decoded.cpu().numpy()
-    
-

@@ -8,6 +8,7 @@ import numpy as np
 import seaborn as sns
 from sklearn.decomposition import PCA
 from scipy.stats import spearmanr
+import pandas as pd
 
 
 np.random.seed(1)
@@ -72,8 +73,6 @@ def plot_norm(encoded, labels):
     plt.ylabel('PCA-2')
     plt.show()
 
-import pandas as pd
-antibody_panel = pd.read_csv('/ihome/hosmanbeyoglu/kor11/tools/SPICESS/notebooks/antibody_panel.csv')
 
 def plot_umap_grid(
     emb, 
@@ -83,7 +82,10 @@ def plot_umap_grid(
     size=40, 
     save=None, 
     fmt='svg', 
+    desc='antibody_panel.csv',
     colors=None):
+    
+    antibody_panel = pd.read_csv(desc)
     
     plt.rcParams['figure.figsize'] = (12, 12)
     
