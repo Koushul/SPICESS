@@ -305,11 +305,11 @@ class TrainModelPipeline(Pipeline):
             pdata_eval: AnnData, 
             latent_dim: int = 16, 
             dropout: float = 0.1, 
-            lr: float = 2e-3, 
+            lr: float = 1e-3, 
             wd: float = 0.0,
-            patience: int = 200,
+            patience: int = 1000,
             delta: float = 1e-3,
-            epochs: int = 5500,
+            epochs: int = 10000,
             kl_gex: float = 1e-6, 
             kl_pex: float = 1e-6, 
             recons_gex: float = 1e-3, 
@@ -319,8 +319,8 @@ class TrainModelPipeline(Pipeline):
             adj: float = 1e-6, 
             spatial: float = 1e-5, 
             mutual_gex: float = 1e-3, 
-            mutual_pex: float = 1e-3
-        ):
+            mutual_pex: float = 1e-3,
+            save: bool = False):
         super().__init__()
         self.tissue = tissue
         self.adata = adata
@@ -334,6 +334,7 @@ class TrainModelPipeline(Pipeline):
         self.delta = delta
         self.lr = lr
         self.wd = wd
+        self.save = save
         
         self.loss_func = Loss(max_epochs=epochs)
 
@@ -474,14 +475,16 @@ class TrainModelPipeline(Pipeline):
         model.eval()
         ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
         name = f'{self.tissue}_{ts}'
-        torch.save(model.state_dict(), f'../model_zoo/model_{name}.pth')
-        self.artifacts.model = f'model_{name}.pth'
-        self.artifacts.proteins = list(self.pdata.var_names)
-        with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
-            yaml.dump(vars(self.artifacts), f)
-        pd.DataFrame(self.metrics.values.__dict__).to_csv(f'../model_zoo/kpi_{name}.csv', index=False)
         
-        print(f'Saved model-config to ../model_zoo/config_{name}.yaml')
+        if self.save:
+            torch.save(model.state_dict(), f'../model_zoo/model_{name}.pth')
+            self.artifacts.model = f'model_{name}.pth'
+            self.artifacts.proteins = list(self.pdata.var_names)
+            with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
+                yaml.dump(vars(self.artifacts), f)
+            pd.DataFrame(self.metrics.values.__dict__).to_csv(f'../model_zoo/kpi_{name}.csv', index=False)
+            
+            print(f'Saved model-config to ../model_zoo/config_{name}.yaml')
     
         output = Namespace()
         output.model = model
