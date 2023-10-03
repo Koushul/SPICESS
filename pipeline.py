@@ -3,6 +3,7 @@ from typing import Tuple
 import pandas as pd
 import scanpy as sc
 import os
+from sklearn.preprocessing import MinMaxScaler
 import torch
 from torch import optim
 from anndata import AnnData
@@ -221,16 +222,24 @@ class InferencePipeline(Pipeline):
         
         return d13, A2
 
-    def run(self, adata: AnnData):
+    def run(self, adata: AnnData, normalize: bool = True):
         assert isinstance(adata, AnnData), 'adata must be an AnnData object.'
-        d13, A2 = self.ingest(adata)
-        imputed_proteins = self.model.impute(d13, A2)
-        adata.obsm['spicess'] = imputed_proteins
+        adatax = adata.copy()
+        scaler = MinMaxScaler()
+
+        d13, A2 = self.ingest(adatax)
+        imputed_proteins, z_latent = self.model.impute(d13, A2, return_z=True)
+
+        proteins_norm = pd.DataFrame(scaler.fit_transform(imputed_proteins), 
+                columns=self.config['proteins'])
         
-        pdata_eval = AnnData(pd.DataFrame(imputed_proteins, columns=self.config['proteins']))
-        pdata_eval.obsm['spatial'] = adata.obsm['spatial']
-        pdata_eval.uns['spatial'] = adata.uns['spatial']
-        pdata_eval.obs = adata.obs
+        pdata_eval = AnnData(proteins_norm)
+        
+        ## clone metadata
+        pdata_eval.obs = adatax.obs
+        pdata_eval.obsm['spatial'] = adatax.obsm['spatial']
+        pdata_eval.uns['spatial'] = adatax.uns['spatial']
+        pdata_eval.obsm['embeddings'] = z_latent
         
         return pdata_eval
         
