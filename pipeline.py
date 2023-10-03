@@ -8,7 +8,7 @@ from torch import optim
 from anndata import AnnData
 from tqdm import tqdm
 import uniport as up
-from utils import clean_adata, featurize
+from utils import clean_adata, featurize, graph_alpha, preprocess_graph
 from spicess.modules.losses import Metrics, Loss
 from early_stopping import EarlyStopping
 from spicess.vae_infomax import InfoMaxVAE
@@ -19,6 +19,7 @@ from sklearn.metrics import accuracy_score
 from datetime import datetime
 import yaml
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import scipy.sparse as sp
 
 floatify = lambda x: torch.tensor(x).cuda().float()
 
@@ -67,6 +68,12 @@ class IntegrateDatasetPipeline(Pipeline):
         self.adata = self.adata_cm[self.adata_cm.obs.domain_id==self.cat_a]
         self.adata2 = self.adata_cm[self.adata_cm.obs.domain_id==self.cat_b]
         
+        self.adata.obsm['spatial'] = adata.obsm['spatial']
+        self.adata.uns['spatial'] = adata.uns['spatial']
+        
+        self.adata2.obsm['spatial'] = adata2.obsm['spatial']
+        self.adata2.uns['spatial'] = adata2.uns['spatial']
+        
         print('Created data integration pipeline.')
         
         
@@ -81,8 +88,16 @@ class IntegrateDatasetPipeline(Pipeline):
             outdir='/ihome/hosmanbeyoglu/kor11/tools/SPICESS/workshop/output',
             ref_id=1)
         adata_cyt.obsm['latent'] = adata_cyt.obsm['project']
+        
         adata = adata_cyt[adata_cyt.obs.domain_id==self.cat_a]
         adata2 = adata_cyt[adata_cyt.obs.domain_id==self.cat_b]
+        
+        adata.obsm['spatial'] = self.adata.obsm['spatial']
+        adata.uns['spatial'] = self.adata.uns['spatial']
+        
+        adata2.obsm['spatial'] = self.adata2.obsm['spatial']
+        adata2.uns['spatial'] = self.adata2.uns['spatial']
+        
         return adata, adata2
         
 class LoadVisiumPipeline(Pipeline):
@@ -174,17 +189,53 @@ class LoadCytAssistPipeline(Pipeline):
         return self.run()
 
 
-# class InferencePipeline(Pipeline):
+class InferencePipeline(Pipeline):
     
-#     def __init__(self, tissue: str, model: InfoMaxVAE):
-#         super().__init__()
-#         self.tissue = tissue
-#         self.model = InfoMaxVAE([d11.shape[1], d12.shape[1]], latent_dim=self.latent_dim, dropout=self.dropout).cuda()
+    def __init__(self, config_pth: str):
+        super().__init__()
 
-                
-#         print('Created inference pipeline.')
+        with open(config_pth, 'r') as f:
+            self.config = yaml.safe_load(f)
+            
+        self.model = InfoMaxVAE(
+            [16, self.config['nproteins']], 
+            latent_dim = self.config['latent_dim'], 
+            dropout = self.config['dropout']
+        ).cuda()
+        
+        self.model.load_state_dict(torch.load('../model_zoo/'+self.config['model']))
+        self.model.eval()
+        
+        self.tissue = self.config['tissue']
+        
+        print('Created inference pipeline.')
+        
+    def ingest(self, adata):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        d13 = floatify(adata.obsm['latent'])
+        adj = graph_alpha(adata.obsm['spatial'], n_neighbors=6)
+        adj_label = adj + sp.eye(adj.shape[0])
+        adj_label = torch.tensor(adj_label.toarray()).to(device)
+        adj_norm = preprocess_graph(adj).to(device)
+        A2 = adj_norm.to_dense()
+        
+        return d13, A2
 
-
+    def run(self, adata: AnnData):
+        assert isinstance(adata, AnnData), 'adata must be an AnnData object.'
+        d13, A2 = self.ingest(adata)
+        imputed_proteins = self.model.impute(d13, A2)
+        adata.obsm['spicess'] = imputed_proteins
+        
+        pdata_eval = AnnData(pd.DataFrame(imputed_proteins, columns=self.config['proteins']))
+        pdata_eval.obsm['spatial'] = adata.obsm['spatial']
+        pdata_eval.uns['spatial'] = adata.uns['spatial']
+        pdata_eval.obs = adata.obs
+        
+        return pdata_eval
+        
+        
+        
 
 
 
@@ -415,10 +466,13 @@ class TrainModelPipeline(Pipeline):
         ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
         name = f'{self.tissue}_{ts}'
         torch.save(model.state_dict(), f'../model_zoo/model_{name}.pth')
+        self.artifacts.model = f'model_{name}.pth'
+        self.artifacts.proteins = list(self.pdata.var_names)
         with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
             yaml.dump(vars(self.artifacts), f)
         pd.DataFrame(self.metrics.values.__dict__).to_csv(f'../model_zoo/kpi_{name}.csv', index=False)
         
+        print(f'Saved model-config to ../model_zoo/config_{name}.yaml')
     
         output = Namespace()
         output.model = model
