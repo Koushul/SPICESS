@@ -9,18 +9,18 @@ from torch import optim
 from anndata import AnnData
 from tqdm import tqdm
 import uniport as up
-from utils import clean_adata, featurize, graph_alpha, preprocess_graph
+from utils import clean_adata, featurize, graph_alpha, preprocess_graph, train_test_split
 from spicess.modules.losses import Metrics, Loss
 from early_stopping import EarlyStopping
 from spicess.vae_infomax import InfoMaxVAE
 import numpy as np
 from scipy.stats import spearmanr
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score
 from datetime import datetime
 import yaml
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 import scipy.sparse as sp
+from scipy.sparse import csr_matrix
+from muon import prot as pt
+
 
 floatify = lambda x: torch.tensor(x).cuda().float()
 
@@ -45,22 +45,19 @@ class Pipeline:
     def __init__(self):
         pass
         
-    def load(self):
-        raise NotImplementedError
-        
-    def save(self):
-        raise NotImplementedError
-
     def run(self):
         raise NotImplementedError
         
-    def __call__(self):
-        return self.run()
 
         
 class IntegrateDatasetPipeline(Pipeline):
-    def __init__(self, tissue, adata, adata2):
+    def __init__(self, tissue: str):
         self.tissue = tissue
+        print('Created data integration pipeline.')
+        
+        
+    def run(self, adata, adata2) -> Tuple[AnnData, AnnData]:
+        
         self.adata_cm = AnnData.concatenate(adata, adata2, join='inner')
         sc.pp.normalize_total(self.adata_cm)
         sc.pp.log1p(self.adata_cm)
@@ -75,10 +72,6 @@ class IntegrateDatasetPipeline(Pipeline):
         self.adata2.obsm['spatial'] = adata2.obsm['spatial']
         self.adata2.uns['spatial'] = adata2.uns['spatial']
         
-        print('Created data integration pipeline.')
-        
-        
-    def run(self) -> Tuple[AnnData, AnnData]:
         adata_cm = AnnData.concatenate(self.adata.copy(), self.adata2.copy(), join='inner')
         adata_cyt = up.Run(
             name=self.tissue, 
@@ -88,14 +81,12 @@ class IntegrateDatasetPipeline(Pipeline):
             out='project',
             outdir='/ihome/hosmanbeyoglu/kor11/tools/SPICESS/workshop/output',
             ref_id=1)
-        adata_cyt.obsm['latent'] = adata_cyt.obsm['project']
         
+        adata_cyt.obsm['latent'] = adata_cyt.obsm['project']
         adata = adata_cyt[adata_cyt.obs.domain_id==self.cat_a]
         adata2 = adata_cyt[adata_cyt.obs.domain_id==self.cat_b]
-        
         adata.obsm['spatial'] = self.adata.obsm['spatial']
         adata.uns['spatial'] = self.adata.uns['spatial']
-        
         adata2.obsm['spatial'] = self.adata2.obsm['spatial']
         adata2.uns['spatial'] = self.adata2.uns['spatial']
         
@@ -126,6 +117,19 @@ class LoadVisiumPipeline(Pipeline):
         
         return adata3
                 
+
+class AbstractEvaluationPipeline(Pipeline):
+    
+    def __init__(self):
+        pass
+    
+    
+    
+    
+    
+    
+    
+    
     
 class LoadCytAssistPipeline(Pipeline):
 
@@ -190,6 +194,93 @@ class LoadCytAssistPipeline(Pipeline):
         return self.run()
 
 
+class FeaturizePipeline(Pipeline):
+    """
+    `run()`:
+        Preprocesses the input AnnData object and adds graph-related information to its `obsm` and `uns` attributes.
+    
+    Parameters
+    ----------
+    adata : AnnData
+        The input AnnData object.
+    min_max : bool, optional (default: True)
+        Whether to apply min-max scaling to the input data.
+    clr : bool, optional (default: False)
+        Whether to apply center-log ratio (CLR) transformation to the input data.
+    log : bool, optional (default: True)
+        Whether to apply log2 transformation to the input data.
+    resolution : float or None, optional (default: 0.3)
+        The resolution parameter for the Leiden clustering algorithm. If None, clustering is not performed.
+    layer_added : str, optional (default: 'normalized')
+        The name of the layer to be added to the `layers` and `obsm` attributes of the AnnData object.
+    
+    Returns
+    -------
+    AnnData
+        The preprocessed AnnData object with additional graph-related information in its `obsm` and `uns` attributes.
+    """
+    
+    def __init__(self, neighbors=6, post_process=None, post_args=None):
+        super().__init__()
+        self.neighbors = neighbors
+        self.post_process = post_process
+        self.post_args = post_args
+        print('Created featurization pipeline.')
+        
+        
+    def make_graph(self, spatial_coords):
+        adj = graph_alpha(spatial_coords, n_neighbors=self.neighbors)
+        adj_label = adj + sp.eye(adj.shape[0])
+        adj_label = adj_label.toarray()
+        
+        pos_weight = float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()
+        norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
+        adj_norm = preprocess_graph(adj)
+        coords = torch.tensor(spatial_coords).float()
+        sp_dists = torch.cdist(coords, coords, p=2)
+        
+        return adj_label, adj_norm, pos_weight, norm, sp_dists
+            
+    def run(self, adata, min_max=True, clr=False, log=True, resolution=0.3, layer_added='normalized') -> AnnData:
+        
+            
+        if 'train_test' not in adata.obs:
+            train_test_split(adata)
+            
+        features = csr_matrix(adata.X).toarray()
+        if clr:
+            features = pt.pp.clr(AnnData(features), inplace=False).X
+        if log:
+            features = np.log2(features+0.5)            
+        if min_max:
+            scaler = MinMaxScaler()
+            features = scaler.fit_transform(features)
+
+        adata.layers[layer_added] = features    
+        adata.obsm[layer_added] = adata.layers[layer_added]
+        
+        if resolution is not None:
+            sc.pp.neighbors(adata, use_rep=layer_added)
+            sc.tl.leiden(adata, resolution=resolution)
+        
+        adj_label, adj_norm, pos_weight, norm, sp_dists = self.make_graph(adata.obsm['spatial'])
+        
+        if 'leiden_colors' in adata.uns:
+            adata.uns.pop('leiden_colors')
+        
+        adata.obsm['adj_label'] = adj_label
+        adata.obsm['adj_norm'] = adj_norm
+        adata.obsm['sp_dists'] = sp_dists
+        adata.uns['pos_weight'] = pos_weight
+        adata.uns['norm'] = norm
+        
+        
+        return adata
+        
+            
+
+
+
 class InferencePipeline(Pipeline):
     
     def __init__(self, config_pth: str):
@@ -224,7 +315,7 @@ class InferencePipeline(Pipeline):
 
     def run(self, adata: AnnData, normalize: bool = True):
         assert isinstance(adata, AnnData), 'adata must be an AnnData object.'
-        adatax = adata.copy()
+        adatax = adata
         scaler = MinMaxScaler()
 
         d13, A2 = self.ingest(adatax)
@@ -251,50 +342,6 @@ class InferencePipeline(Pipeline):
 class TrainModelPipeline(Pipeline):
     """
     Pipeline for training a model using matched spatial gene expression and protein expression data.
-
-    adata (AnnData): 
-        raw gene expression counts
-    pdata (AnnData): 
-        raw adt counts
-    adata_eval (AnnData): 
-        Annotated data matrix for gene expression evaluation. Defaults to None.
-    pdata_eval (AnnData): 
-        Annotated data matrix for protein expression evaluation. Defaults to None.
-    latent_dim (int, optional): 
-        Dimension of the latent space. Defaults to 16.
-    dropout (float, optional): 
-        Dropout rate. Defaults to 0.1.
-    lr (float, optional): 
-        Learning rate. Defaults to 2e-3.
-    wd (float, optional): 
-        Weight decay. Defaults to 0.0.
-    patience (int, optional): 
-        Number of epochs to wait for improvement before early stopping. Defaults to 200.
-    delta (float, optional): 
-        Minimum change in the monitored quantity to qualify as improvement. Defaults to 1e-3.
-    epochs (int, optional): 
-        Maximum number of epochs to train the model. Defaults to 5500.
-    kl_gex (float, optional): 
-        Weight for gene expression KL divergence loss. Defaults to 1e-6.
-    kl_pex (float, optional): 
-        Weight for protein expression KL divergence loss. Defaults to 1e-6.
-    recons_gex (float, optional): 
-        Weight for gene expression reconstruction loss. Defaults to 1e-3.
-    recons_pex (float, optional): 
-        Weight for protein expression reconstruction loss. Defaults to 1e-3.
-    cosine_gex (float, optional): 
-        Weight for gene expression cosine similarity loss. Defaults to 1e-3.
-    cosine_pex (float, optional): 
-        Weight for protein expression cosine similarity loss. Defaults to 1e-3.
-    adj (float, optional): 
-        Weight for adjacency matrix binary cross entropy loss. Defaults to 1e-6.
-    spatial (float, optional): 
-        Weight for spatial distance loss. Defaults to 1e-5.
-    mutual_gex (float, optional): 
-        Weight for gene expression mutual information loss. Defaults to 1e-3.
-    mutual_pex (float, optional): 
-        Weight for protein expression mutual information loss. Defaults to 1e-3.
-        
     """
     
     def __init__(self, 
@@ -320,6 +367,7 @@ class TrainModelPipeline(Pipeline):
             spatial: float = 1e-5, 
             mutual_gex: float = 1e-3, 
             mutual_pex: float = 1e-3,
+            cross_validate: bool = True,
             save: bool = False):
         super().__init__()
         self.tissue = tissue
@@ -335,7 +383,7 @@ class TrainModelPipeline(Pipeline):
         self.lr = lr
         self.wd = wd
         self.save = save
-        
+        self.featurizer = FeaturizePipeline()
         self.loss_func = Loss(max_epochs=epochs)
 
         self.loss_func.alpha = {
@@ -379,6 +427,9 @@ class TrainModelPipeline(Pipeline):
             mutual_pex=self.loss_func.alpha['mutual_pex']
         )
         
+        # self.gex, self.pex = self.pre_process_inputs(self.adata, self.pdata)
+        # self.gex_eval, self.pex_eval = self.pre_process_inputs(self.adata_eval, self.pdata_eval)
+        
         print('Created training pipeline.')
     
     
@@ -387,36 +438,62 @@ class TrainModelPipeline(Pipeline):
         gex = featurize(adata, neighbors=neighbors)
         pex = featurize(pdata, neighbors=neighbors, clr=True)
         
-        gex.features = adata.obsm[layer]
-        
+        gex.features = adata.obsm[layer]    
+        gex.features = MinMaxScaler().fit_transform(adata.obsm[layer])
+    
         return gex, pex
         
-    def transfer_accuracy(self, z_genes, z_proteins, labels, n_neighbors=12):
-        knn =  KNeighborsClassifier(n_neighbors=n_neighbors, weights='distance').fit(z_genes, labels)
-        return accuracy_score(knn.predict(z_proteins), labels)
-        
+    # def transfer_accuracy(self, z_genes, z_proteins, labels, n_neighbors=12):
+    #     knn =  KNeighborsClassifier(n_neighbors=n_neighbors, weights='distance').fit(z_genes, labels)
+    #     return accuracy_score(knn.predict(z_proteins), labels)
+    
+    
     def run(self):
-        gex, pex = self.pre_process_inputs(self.adata, self.pdata)
-        gex_eval, pex_eval = self.pre_process_inputs(self.adata_eval, self.pdata_eval)
-        refLabels = self.adata.obs.celltypes.values
-        d11 = floatify(gex.features)
-        d12 = floatify(pex.features)
-        d13 = floatify(gex_eval.features)
-        d14 = floatify(pex_eval.features)
+        output, artifacts = self.train(self.adata, self.pdata, self.adata_eval, self.pdata_eval)
+        
+        ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
+        name = f'{self.tissue}_{ts}'
+        
+        if self.save:
+            torch.save(output.model.state_dict(), f'../model_zoo/model_{name}.pth')
+            artifacts.model = f'model_{name}.pth'
+            artifacts.proteins = list(self.pdata.var_names)
+            with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
+                yaml.dump(vars(self.artifacts), f)
+            pd.DataFrame(self.metrics.values.__dict__).to_csv(f'../model_zoo/kpi_{name}.csv', index=False)
+            
+            print(f'Saved model-config to ../model_zoo/config_{name}.yaml')
+            
+        return output
+        
+        
+    def train(self, adata_train, pdata_train, adata_eval, pdata_eval):
+        ## 
+        self.featurizer.run(adata_train)
+        self.featurizer.run(pdata_train, clr=True)
+        self.featurizer.run(adata_eval)
+        self.featurizer.run(pdata_eval, clr=True)
+        
+        d11 = floatify(adata_train.obsm['latent'])
+        d12 = floatify(pdata_train.obsm['normalized'])
+        d13 = floatify(adata_eval.obsm['latent'])
+        d14 = floatify(pdata_eval.obsm['normalized'])
+
+        adj_label = floatify(pdata_train.obsm['adj_label'])
+        pos_weight = floatify(pdata_train.uns['pos_weight'])
+        sp_dists = floatify(pdata_train.obsm['sp_dists'])
+        norm = floatify(pdata_train.uns['norm'])
+        
+        A = adata_train.obsm['adj_norm'].to_dense().cuda()
+        A2 = adata_eval.obsm['adj_norm'].to_dense().cuda()
         
         model = InfoMaxVAE([d11.shape[1], d12.shape[1]], latent_dim=self.latent_dim, dropout=self.dropout).cuda()
         es = EarlyStopping(model, patience=self.patience, verbose=False, delta=self.delta)
         optimizer = optim.Adam(model.parameters(), lr=self.lr, weight_decay=self.wd)
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=80, verbose=False)
 
-        
-        test_acc = 0
         losses = []
         test_protein = d14[:, :].data.cpu().numpy()
-
-        A = gex.adj_norm.to_dense()
-        A2 = gex_eval.adj_norm.to_dense()
-
+        
         with tqdm(total=self.epochs) as pbar:
             for e in range(self.epochs):
 
@@ -424,68 +501,48 @@ class TrainModelPipeline(Pipeline):
                 optimizer.zero_grad()
 
                 output = model(X=[d11, d12], A=A)            
-                
                 output.epochs = self.epochs
-                output.adj_label = gex.adj_label
-                output.pos_weight = gex.pos_weight
-                output.gex_sp_dist = gex.sp_dists
-                output.norm = gex.norm
-
+                output.adj_label = adj_label
+                output.pos_weight = pos_weight
+                output.gex_sp_dist = sp_dists
+                output.norm = norm
+                                
                 buffer = self.loss_func.compute(e, output)
                 loss = self.metrics(buffer).sum()
                 loss.backward()
+                
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
                 optimizer.step()
                 losses.append(float(loss))
-                
                 model.eval()
-                    
-                evalo = model(X=[d11, d12], A=A) 
+
                 imputed_proteins = model.impute(d13, A2)
                 oracle_corr = np.mean(column_corr(test_protein, imputed_proteins))
                 self.metrics.update_value('oracle', oracle_corr, track=True)
-                test_acc = self.transfer_accuracy(
-                    evalo.gex_z.detach().cpu().numpy(), 
-                    evalo.pex_z.detach().cpu().numpy(), 
-                    refLabels)
-                self.metrics.update_value('test_acc', test_acc, track=True)      
+                
+                
+                oracle_self = np.mean(column_corr(d12[:, :].data.cpu().numpy(), model.impute(d11, A)))
+                self.metrics.update_value('oracle_self', oracle_self, track=True)
+                
                 
                 es(1-self.metrics.means.oracle, model)
                 if es.early_stop: 
                     model = es.best_model
                     break
                 
-                # scheduler.step(1-self.metrics.means.oracle)
-                
-                _alignment = self.metrics.means.test_acc
                 _imputation = self.metrics.means.oracle
+                _self_imputation = self.metrics.means.oracle_self
+                
                 _loss = np.mean(losses)
-                lr = scheduler.optimizer.param_groups[0]['lr']
                 
                 pbar.update()        
                 pbar.set_description(
-                    f'Imputation: {_alignment:.3f} || Alignment: {_imputation:.3f}% | Loss: {_loss:.3g} | lr: {lr:.1e}'
+                    f'Imputation: {_imputation:.3f} | SelfImputation: {_self_imputation:.3f} | Loss: {_loss:.3g}'
                 )  
-                pbar.set_postfix({'es-counter': es.counter+1})
-                
-
-                
-
-        model = es.best_model
-        model.eval()
-        ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
-        name = f'{self.tissue}_{ts}'
+                # pbar.set_postfix({'es-counter': es.counter+1})
         
-        if self.save:
-            torch.save(model.state_dict(), f'../model_zoo/model_{name}.pth')
-            self.artifacts.model = f'model_{name}.pth'
-            self.artifacts.proteins = list(self.pdata.var_names)
-            with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
-                yaml.dump(vars(self.artifacts), f)
-            pd.DataFrame(self.metrics.values.__dict__).to_csv(f'../model_zoo/kpi_{name}.csv', index=False)
-            
-            print(f'Saved model-config to ../model_zoo/config_{name}.yaml')
-    
+        model.eval()
+        model = es.best_model
         output = Namespace()
         output.model = model
         output.d11 = d11
@@ -496,5 +553,4 @@ class TrainModelPipeline(Pipeline):
         output.A2 = A2
         output.metrics = self.metrics
         
-
-        return output
+        return output, self.artifacts

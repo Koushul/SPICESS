@@ -2,7 +2,6 @@ from argparse import Namespace
 from matplotlib import pyplot as plt
 import numpy as np
 import scipy
-from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors, kneighbors_graph
 from sklearn.preprocessing import MinMaxScaler
 import torch
@@ -14,6 +13,10 @@ import math
 from scipy.stats import spearmanr
 from sklearn.metrics import roc_auc_score, f1_score
 import gudhi
+from muon import prot as pt
+from sklearn.model_selection import cross_val_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import roc_auc_score
 import scanpy as sc
 
 def euclidean_distance(p1, p2):
@@ -88,7 +91,7 @@ def mask_nodes_edges(nNodes,testNodeSize=0.1,valNodeSize=0.05,seed=3):
 
 def train_test_split(adata):
     adata.obs['idx'] = list(range(0, len(adata)))
-    xy = adata.obsm['spatial']
+    xy = np.array(adata.obsm['spatial'])
     x = xy[:, 0]
     y = xy[:, 1]
     xmin, ymin = adata.obsm['spatial'].min(0)
@@ -138,6 +141,17 @@ def graph_alpha(spatial_locs, n_neighbors=10):
 
     return nx.to_scipy_sparse_matrix(extended_graph, format='csr')
 
+
+
+def knn_cross_val(X, y, n_neighbors=5, n_splits=10):
+    knn = KNeighborsClassifier(n_neighbors=n_neighbors)
+    cv_scores = cross_val_score(knn, X, y, cv=n_splits, scoring='roc_auc')
+    mean_auc = cv_scores.mean()
+    return mean_auc
+
+
+
+
 def featurize(input_adata, neighbors=6, clr=False, normalize_total=True):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     varz = Namespace()
@@ -150,11 +164,13 @@ def featurize(input_adata, neighbors=6, clr=False, normalize_total=True):
     features_raw = torch.tensor(features.X)
 
     if clr:
-        features = clr_normalize_each_cell(features)
-        
-    featurelog = np.log2(features.X+1/2)
+        # features = clr_normalize_each_cell(features)
+        pt.pp.clr(features)
+            
+    featurelog = np.log2(features.X+0.5)
     scaler = MinMaxScaler()
-    featurelog = np.transpose(scaler.fit_transform(np.transpose(featurelog)))
+    featurelog = scaler.fit_transform(featurelog)
+    
     feature = torch.tensor(featurelog)
 
     # adj = getA_knn(features.obsm['spatial'], neighbors)
