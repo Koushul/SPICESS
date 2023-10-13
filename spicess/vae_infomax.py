@@ -55,6 +55,30 @@ class InfoMaxVAE(nn.Module):
                 corruption=corruption),
         ])
         
+        
+        dim1, dim2 = input_dim
+        
+        # self.encoders = nn.ModuleList([
+        #     nn.Sequential(
+        #         nn.Linear(dim1, encoder_dim*2),
+        #         nn.BatchNorm1d(encoder_dim*2),
+        #         nn.LeakyReLU(),
+        #         nn.Dropout(dropout),
+        #         nn.Linear(encoder_dim*2, encoder_dim),
+        #         nn.BatchNorm1d(encoder_dim),
+        #         nn.LeakyReLU(),
+        #     ),
+        #     nn.Sequential(
+        #         nn.Linear(dim2, encoder_dim*2),
+        #         nn.BatchNorm1d(encoder_dim*2),
+        #         nn.LeakyReLU(),
+        #         nn.Dropout(dropout),
+        #         nn.Linear(encoder_dim*2, encoder_dim),
+        #         nn.BatchNorm1d(encoder_dim),
+        #         nn.LeakyReLU(),
+        #     ),
+        # ])
+        
         self.fc_mus = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
@@ -81,7 +105,6 @@ class InfoMaxVAE(nn.Module):
             )
         ])
         
-        dim1, dim2 = input_dim
         self.decoders = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(latent_dim, dim1),
@@ -116,6 +139,12 @@ class InfoMaxVAE(nn.Module):
         gex_pos_z, gex_neg_z, gex_summary = self.encoders[0](X[0], edge_index)
         pex_pos_z, pex_neg_z, pex_summary = self.encoders[1](X[1], edge_index)                
         return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
+    
+    # def encode(self, X, A):
+    #     gex_neg_z = gex_pos_z = self.encoders[0](X[0])
+    #     pex_neg_z = pex_pos_z = self.encoders[1](X[1])                
+    #     gex_summary = pex_summary = None
+    #     return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
         
     def refactor(self, X, A):
         index = range(2)
@@ -148,6 +177,8 @@ class InfoMaxVAE(nn.Module):
     
     def forward(self, X, A):
         output = Namespace()
+        
+        # A = torch.eye(A.shape[0]).to(A.device)
         
         gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary = self.encode(X, A)
         encoded = [gex_pos_z, pex_pos_z]
@@ -182,6 +213,11 @@ class InfoMaxVAE(nn.Module):
     @torch.no_grad()
     def impute(self, X, adj, enable_dropout=False, return_z=False):
         self.eval()
+        
+        # adj = torch.eye(adj.shape[0]).to(adj.device)
+        
+        
+        
         if enable_dropout:
             self.enable_dropout()
         edge_index = adj.nonzero().t().contiguous()
@@ -192,3 +228,15 @@ class InfoMaxVAE(nn.Module):
             return decoded.cpu().numpy(), z.cpu().numpy()       
             
         return decoded.cpu().numpy()
+    
+    
+    # @torch.no_grad()
+    # def impute(self, X, A, return_z=False):
+    #     self.eval()
+        
+    #     pos_z = self.encoders[0](X)
+    #     z = self.fc_mus[0](pos_z)
+    #     decoded = self.decoders[1](z)
+    #     if return_z:
+    #         return decoded.cpu().numpy(), z.cpu().numpy() 
+    #     return decoded.cpu().numpy()
