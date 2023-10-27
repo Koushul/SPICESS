@@ -9,7 +9,7 @@ import seaborn as sns
 from sklearn.decomposition import PCA
 from scipy.stats import spearmanr
 import pandas as pd
-
+import squidpy as sq
 
 np.random.seed(1)
 
@@ -29,7 +29,6 @@ ref_colors = [
     "#794bc8",
     "#e85a00"
 ]
-
 
 def plot_recons(integrated_data):
     gex_recons = integrated_data.gex_recons.data.cpu().numpy()
@@ -57,9 +56,6 @@ def plot_recons(integrated_data):
     plt.xlim(0, 1)
     plt.show()
 
-
-
-
 def plot_norm(encoded, labels):
     
     z = np.random.multivariate_normal([0]*2, np.eye(2), len(labels))
@@ -72,7 +68,6 @@ def plot_norm(encoded, labels):
     plt.xlabel('PCA-1')
     plt.ylabel('PCA-2')
     plt.show()
-
 
 def plot_umap_grid(
     emb, 
@@ -127,10 +122,6 @@ def plot_umap_grid(
         
     plt.show()
     
-    
-
-
-
 def plot_latent(
     data,
     labels,
@@ -227,3 +218,26 @@ def plot_latent(
         plt.show()
         
     return datax
+
+
+def plot_feature_maps(adata, pdata, protein_names, titles):
+    # adts = ['CD68', 'PAX5', 'CD8A', 'CD19', 'CXCR5', 'MS4A1', 'CD3E', 'ITGAM']
+    adts = protein_names
+    figsize = (32, 8)
+    dpi = 180
+    # titles = ['CD68\n(Macrophages)', 'PAX5\n(B Cells)', 'CD8A\n(Killer T Cells)', 'CD19\n(B Cells)', 'CD4\n(T Helper Cells)', 
+    # 'CD20\n(B Cells)', 'CD3E\n(Regulatory T Cells)', 'CD11b\n(Neutrophils)']
+
+    f, ax = plt.subplots(2, 8, figsize=figsize, dpi=dpi)
+    ax = ax.flatten()
+
+    sq.pl.spatial_scatter(adata, color=adts, crop_coord=tuple([0, 0, 28000, 40000]), dpi=dpi, size=1.6, 
+                        ncols=len(protein_names), frameon=False, figsize=figsize, edgecolor='black', linewidth=0.15, cmap='rainbow', colorbar=False,
+                        title='', ax=ax[:8], fig=f, return_ax=True)
+
+    sq.pl.spatial_scatter(pdata, color=adts, crop_coord=tuple([0, 0, 28000, 40000]), dpi=dpi, size=1.6, 
+                        ncols=len(protein_names), frameon=False, figsize=figsize, edgecolor='black', linewidth=0.15, cmap='rainbow', colorbar=False,
+                        title=titles, ax=ax[8:], fig=f, return_ax=True)
+
+    plt.tight_layout()
+    plt.show()
