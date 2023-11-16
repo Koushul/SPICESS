@@ -57,28 +57,7 @@ class InfoMaxVAE(nn.Module):
         
         
         dim1, dim2 = input_dim
-        
-        # self.encoders = nn.ModuleList([
-        #     nn.Sequential(
-        #         nn.Linear(dim1, encoder_dim*2),
-        #         nn.BatchNorm1d(encoder_dim*2),
-        #         nn.LeakyReLU(),
-        #         nn.Dropout(dropout),
-        #         nn.Linear(encoder_dim*2, encoder_dim),
-        #         nn.BatchNorm1d(encoder_dim),
-        #         nn.LeakyReLU(),
-        #     ),
-        #     nn.Sequential(
-        #         nn.Linear(dim2, encoder_dim*2),
-        #         nn.BatchNorm1d(encoder_dim*2),
-        #         nn.LeakyReLU(),
-        #         nn.Dropout(dropout),
-        #         nn.Linear(encoder_dim*2, encoder_dim),
-        #         nn.BatchNorm1d(encoder_dim),
-        #         nn.LeakyReLU(),
-        #     ),
-        # ])
-        
+                
         self.fc_mus = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
@@ -140,11 +119,6 @@ class InfoMaxVAE(nn.Module):
         pex_pos_z, pex_neg_z, pex_summary = self.encoders[1](X[1], edge_index)                
         return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
     
-    # def encode(self, X, A):
-    #     gex_neg_z = gex_pos_z = self.encoders[0](X[0])
-    #     pex_neg_z = pex_pos_z = self.encoders[1](X[1])                
-    #     gex_summary = pex_summary = None
-    #     return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
         
     def refactor(self, X, A):
         index = range(2)

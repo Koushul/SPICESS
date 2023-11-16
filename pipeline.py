@@ -9,7 +9,7 @@ from torch import optim
 from anndata import AnnData
 from tqdm import tqdm
 import uniport as up
-from utils import clean_adata, clr_normalize_each_cell, featurize, graph_alpha, preprocess_graph, train_test_split
+from utils import clean_adata, graph_alpha, preprocess_graph, train_test_split
 from spicess.modules.losses import Metrics, Loss
 from early_stopping import EarlyStopping
 from spicess.vae_infomax import InfoMaxVAE
@@ -21,6 +21,10 @@ import scipy.sparse as sp
 from scipy.sparse import csr_matrix
 from muon import prot as pt
 import scipy
+import glob
+from sklearn.metrics import adjusted_rand_score
+from sklearn.cluster import KMeans
+
 
 class CleanExit:
     def __enter__(self):
@@ -105,6 +109,34 @@ class IntegrateDatasetPipeline(Pipeline):
         
         return adata, adata2
         
+        
+class LoadH5ADPipeline(Pipeline):
+    
+    def load_h5(self, h5_file, ix):
+        adata3 = sc.read_h5ad(h5_file)
+        adata3.obs['source'] = f'{self.tissue} Sample {ix}'
+        adata3.obs['domain_id'] = 100+int(ix)
+        adata3.obs['source'] = adata3.obs['source'].astype('category')
+        adata3.obs['domain_id'] = adata3.obs['domain_id'].astype('category')
+        
+        return adata3
+        
+    
+    def __init__(self, tissue: str, h5_dir: str):
+        super().__init__()
+        self.tissue = tissue
+        self.fnames = sorted(glob.glob(h5_dir+'/*.h5ad'), key=lambda x: int(x.split('_')[-1].split('.')[0]))
+        print(f'Created H5AD data loader pipeline with {len(self.fnames)} h5ad files.')
+        
+        
+    def run(self, i) -> AnnData:
+        _adata = self.load_h5(self.fnames[i], i)
+        _adata.var_names = _adata.var.feature_name.values
+        clean_adata(_adata)
+        
+        return _adata
+        
+        
 class LoadVisiumPipeline(Pipeline):
     def __init__(self, tissue: str, visium_dir: str, sample_id: int, name: str):
         super().__init__()
@@ -139,30 +171,30 @@ class AbstractEvaluationPipeline(Pipeline):
     
     
     
-    
-    
-    
-    
-    
 class LoadCytAssistPipeline(Pipeline):
 
     def __init__(self, 
-            tissue: str, h5_file: str, geneset: str, 
-            sample_id: int, name: str, 
+            tissue: str, h5_file: str, 
+            sample_id: int, name: str,
+            geneset: str = None, 
             celltypes: list = None):
         super().__init__()
+        
         self.tissue = tissue
         self.celltypes = celltypes
         self.h5_file = h5_file
         self.sample_id = sample_id
         self.name = name
-        with open(geneset, 'r') as f:
-            self.geneset = [g.strip() for g in f.readlines()]
+        if geneset is not None:
+            with open(geneset, 'r') as f:
+                self.geneset = [g.strip() for g in f.readlines()]
+        else:
+            self.geneset = None
             
         print('Created CytAssist data loader pipeline.')
         
         
-    def load_data(self, h5_file: str, ) -> Tuple[AnnData, AnnData]:
+    def load_data(self, h5_file: str, return_raw=False) -> Tuple[AnnData, AnnData]:
         adata = sc.read_10x_h5(h5_file, gex_only=False)
         visium_ = sc.read_visium(path=os.path.dirname(h5_file))
         adata.uns['spatial'] = visium_.uns['spatial']  
@@ -205,8 +237,35 @@ class LoadCytAssistPipeline(Pipeline):
         
     def __call__(self):
         return self.run()
-
-
+    
+    
+    
+class BulkCytAssistLoaderPipeline(Pipeline):
+    def __init__(self, tissue: str, data_dir: str, geneset: str = None):
+        self.tissue = tissue
+        self.data_dir = data_dir
+        self.geneset = geneset
+        self.fnames = sorted(os.listdir(data_dir))
+        self.loaders = []
+        for i, fname in enumerate(self.fnames):
+            self.loaders.append(
+                LoadCytAssistPipeline(
+                    tissue=self.tissue, 
+                    h5_file=data_dir+fname+'/outs/filtered_feature_bc_matrix.h5',
+                    geneset=self.geneset,
+                    sample_id = 200+int(i),
+                    name = f'{self.tissue} Sample {i}',
+                )   
+            )
+            
+        print(f'Created Bulk CytAssist data loader pipeline with {len(self.fnames)} samples.')
+    
+    def run(self, i):
+        return self.loaders[i].run()
+    
+    
+    
+    
 class FeaturizePipeline(Pipeline):
     """
     `run()`:
@@ -238,7 +297,7 @@ class FeaturizePipeline(Pipeline):
         self.neighbors = neighbors
         self.post_process = post_process
         self.post_args = post_args
-        print('Created featurization pipeline.')
+        # print('Created featurization pipeline.')
         
         
     def make_graph(self, spatial_coords):
@@ -310,11 +369,6 @@ class FeaturizePipeline(Pipeline):
         
         
         return adata
-        
-            
-
-
-
 class InferencePipeline(Pipeline):
     
     def __init__(self, config_pth=None, model = None, tissue=None, proteins=None):
@@ -346,7 +400,7 @@ class InferencePipeline(Pipeline):
             self.tissue = tissue
         if proteins is not None:
             self.proteins = proteins
-        print('Created inference pipeline.')
+        # print('Created inference pipeline.')
         
     def ingest(self, adata):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -364,7 +418,7 @@ class InferencePipeline(Pipeline):
         if 'adj_norm' in adata.obsm:
             del adata.obsm['adj_norm']
         adata = adata.copy()
-        self.featurizer.run(adata, clr=False, min_max=True, log=False, layer_used='latent', resolution=None)
+        self.featurizer.run(adata, clr=False, min_max=True, log=True, layer_used='latent', resolution=None)
         adatax = adata
         scaler = MinMaxScaler()
 
@@ -387,12 +441,6 @@ class InferencePipeline(Pipeline):
         pdata_eval.obsm['embeddings'] = z_latent
         
         return pdata_eval
-        
-        
-        
-
-
-
 class TrainModelPipeline(Pipeline):
     """
     Pipeline for training a model using matched spatial gene expression and protein expression data.
@@ -404,6 +452,7 @@ class TrainModelPipeline(Pipeline):
             pdata: AnnData,
             adata_eval: AnnData ,
             pdata_eval: AnnData, 
+            adata_test: AnnData = None,
             latent_dim: int = 16, 
             dropout: float = 0.0, 
             lr: float = 1e-3, 
@@ -427,6 +476,7 @@ class TrainModelPipeline(Pipeline):
         self.tissue = tissue
         self.adata = adata
         self.pdata = pdata
+        self.adata_test = adata_test
         self.epochs = int(epochs)
         self.adata_eval = adata_eval
         self.pdata_eval = pdata_eval
@@ -522,7 +572,6 @@ class TrainModelPipeline(Pipeline):
             output, artifacts = self.train(self.adata, self.pdata, self.adata_eval, self.pdata_eval)
         # output, artifacts = self.train(self.adata_eval, self.pdata_eval, self.adata, self.pdata)
         
-        
         ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
         name = f'{self.tissue}_{ts}'
         
@@ -539,9 +588,6 @@ class TrainModelPipeline(Pipeline):
         return output
     
     
-
-        
-        
     def train(self, adata_train, pdata_train, adata_eval, pdata_eval, label='Training', show_for=None):
         ## 
         self.featurizer.run(adata_train, clr=False, min_max=True, log=True, layer_used='latent')
@@ -569,7 +615,7 @@ class TrainModelPipeline(Pipeline):
 
         losses = []
         test_protein = d14[:, :].data.cpu().numpy()
-        
+                
         with tqdm(total=self.epochs, disable=label!='Training') as pbar:
             for e in range(self.epochs):
 
@@ -597,11 +643,9 @@ class TrainModelPipeline(Pipeline):
                 oracle_corr = np.mean(column_corr(test_protein, imputed_proteins))
                 self.metrics.update_value('oracle', oracle_corr, track=True)
                 
-                
                 oracle_self = np.mean(column_corr(d12[:, :].data.cpu().numpy(), model.impute(d11, A)))
                 
                 self.metrics.update_value('oracle_self', oracle_self, track=True)
-                
                 
                 es(1-self.metrics.means.oracle, model)
                 if es.early_stop: 
@@ -609,8 +653,7 @@ class TrainModelPipeline(Pipeline):
                     break
                 
                 _imputation = self.metrics.means.oracle
-                _self_imputation = self.metrics.means.oracle_self
-                
+                _self_imputation = self.metrics.means.oracle_self                        
                 _loss = np.mean(losses)
                 
                 pbar.update()        
@@ -618,7 +661,6 @@ class TrainModelPipeline(Pipeline):
                     f'{label} > Imputation: {_imputation:.3f} | SelfImputation: {_self_imputation:.3f} | Loss: {_loss:.3g}'
                 )  
 
-        
         model = es.best_model
         model.eval()
         
