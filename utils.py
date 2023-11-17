@@ -273,6 +273,39 @@ def select_points_for_concentric_circles(points, center, inner_radius, outer_rad
             selected_points.append(point)
     return selected_points
 
+class ImageSlicer:
+    
+    def __init__(self, adata, grayscale=True, size=None):
+        self.adata = adata
+        _spatial = adata.uns['spatial']
+        self.key = list(_spatial.keys())[0]
+        self.scale_factor = _spatial[self.key ]['scalefactors']['tissue_hires_scalef']
+        self.spot_size = _spatial[self.key ]['scalefactors']['spot_diameter_fullres'] * 0.5
+        self.xy = adata.obsm['spatial'] * self.scale_factor
+        self.d = size or int(self.spot_size)
+        self.img = _spatial[self.key]['images']['hires']
+        self.grayscale = grayscale
+        
+    def __len__(self):
+        return len(self.xy)
+        
+    def crop_at(self, x, y, size=None):
+        if size:
+            d = size
+        else:
+            d = self.d
+            
+        image = self.img[y-d:y+d, x-d:x+d]
+        
+        if not self.grayscale:
+            return image
+        
+        return np.dot(image[...,:3], [0.299, 0.587, 0.114])    
+    
+    def __call__(self, ix, size=None):
+        x, y = self.xy[ix].astype(int)
+        return self.crop_at(x, y, size=size)
+    
 
 def clean_adata(adata):
     for v in ['mt', 'n_cells_by_counts', 'mean_counts', 'log1p_mean_counts', 'pct_dropout_by_counts', 'total_counts', 'log1p_total_counts', 

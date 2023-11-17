@@ -9,7 +9,7 @@ from torch import optim
 from anndata import AnnData
 from tqdm import tqdm
 import uniport as up
-from utils import clean_adata, graph_alpha, preprocess_graph, train_test_split
+from utils import ImageSlicer, clean_adata, graph_alpha, preprocess_graph, train_test_split
 from spicess.modules.losses import Metrics, Loss
 from early_stopping import EarlyStopping
 from spicess.vae_infomax import InfoMaxVAE
@@ -461,15 +461,19 @@ class TrainModelPipeline(Pipeline):
             delta: float = 1e-3,
             epochs: int = 10000,
             kl_gex: float = 1e-6, 
-            kl_pex: float = 1e-6, 
+            kl_pex: float = 1e-6,
+            kl_img: float = 1e-8, 
             recons_gex: float = 1e-3, 
             recons_pex: float = 1e-3, 
-            cosine_gex: float = 1e-3, 
-            cosine_pex: float = 1e-3, 
+            recons_img: float = 1e-3,
+            cosine_gex: float = 1e-4, 
+            cosine_pex: float = 1e-4,
+            cosine_img: float = 1e-4, 
             adj: float = 1e-6, 
             spatial: float = 1e-5, 
             mutual_gex: float = 1e-3, 
             mutual_pex: float = 1e-3,
+            batch_size: int = 8,
             cross_validate: bool = True,
             save: bool = False):
         super().__init__()
@@ -484,6 +488,7 @@ class TrainModelPipeline(Pipeline):
         self.dropout = dropout
         self.patience = patience
         self.delta = delta
+        self.batch_size = batch_size
         self.lr = lr
         self.wd = wd
         self.save = save
@@ -500,7 +505,10 @@ class TrainModelPipeline(Pipeline):
             'adj': adj,
             'spatial': spatial,
             'mutual_gex': mutual_gex,
-            'mutual_pex': mutual_pex    
+            'mutual_pex': mutual_pex,    
+            'kl_img': kl_img,
+            'recons_img': recons_img,
+            'cosine_img': cosine_img
         }
         
         self.metrics = Metrics(track=True)
@@ -547,10 +555,10 @@ class TrainModelPipeline(Pipeline):
     
     
     def run(self, show_for=None):
-        train_test_split(self.adata)
-        train_test_split(self.pdata)
         output = Namespace()
         if self.cross_validate:
+            train_test_split(self.adata)
+            train_test_split(self.pdata)
             imputed_concat = np.ones((self.adata.shape[0], self.pdata.shape[1]))
             real_concat = np.ones((self.adata.shape[0], self.pdata.shape[1]))
             
@@ -609,8 +617,13 @@ class TrainModelPipeline(Pipeline):
         A = adata_train.obsm['adj_norm'].to_dense().cuda()
         A2 = adata_eval.obsm['adj_norm'].to_dense().cuda()
         
+        slicer_train = ImageSlicer(adata_train, size=32, grayscale=True)
+
+        Y = floatify(np.stack([slicer_train(i) for i in range(len(slicer_train))])).transpose(1, -1).unsqueeze(1)
+        
         model = InfoMaxVAE([d11.shape[1], d12.shape[1]], latent_dim=self.latent_dim, dropout=self.dropout).cuda()
         es = EarlyStopping(model, patience=self.patience, verbose=False, delta=self.delta)
+        es.best_model = model
         optimizer = optim.Adam(model.parameters(), lr=self.lr, weight_decay=self.wd)
 
         losses = []
@@ -618,11 +631,13 @@ class TrainModelPipeline(Pipeline):
                 
         with tqdm(total=self.epochs, disable=label!='Training') as pbar:
             for e in range(self.epochs):
-
+                
                 model.train()
+                model.image_encoder.train()
+                
                 optimizer.zero_grad()
-
-                output = model(X=[d11, d12], A=A)            
+                                
+                output = model(X=[d11, d12], Y=Y, A=A)            
                 output.epochs = self.epochs
                 output.adj_label = adj_label
                 output.pos_weight = pos_weight
@@ -633,7 +648,7 @@ class TrainModelPipeline(Pipeline):
                 loss = self.metrics(buffer).sum()
                 loss.backward()
                 
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
                 optimizer.step()
                 losses.append(float(loss))
                 model.eval()
@@ -675,6 +690,7 @@ class TrainModelPipeline(Pipeline):
         output.d12 = d12
         output.d13 = d13
         output.d14 = d14
+        output.Y = Y
         output.A = A
         output.A2 = A2
         output.metrics = self.metrics

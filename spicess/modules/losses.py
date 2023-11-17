@@ -31,7 +31,6 @@ def compute_distance(a, b, dist_method='euclidean'):
         return sim, dist
 
 _f = lambda x: float(x)
-
     
 class LossFunctions:
 
@@ -87,6 +86,11 @@ class LossFunctions:
         reconstruction_loss = (reconstructed - data).square().mean(axis=1).mean(axis=0)
         return reconstruction_loss
     
+    def mean_sq_error_(reconstructed, data):
+        """Controls the ability of the latent space to encode information."""
+        reconstruction_loss = (reconstructed - data).square().mean(axis=1).mean(axis=0)
+        return reconstruction_loss
+        
     # @staticmethod
     # def cross_loss(comb1, comb2, W):
     #     _, comdiff1 = compute_distance(comb1, comb2)
@@ -95,7 +99,7 @@ class LossFunctions:
     #     return cross_loss
 
     @staticmethod
-    def kl(epoch, epochs, mu, logvar):
+    def kl(epoch, epochs, mu, logvar, anneal=False):
         """
         Controls the smoothness of the latent space.
         The KL divergence measures the amount of information lost 
@@ -111,9 +115,21 @@ class LossFunctions:
         
         c = epochs / 2  # Midpoint
         kl_anneal = 1 / ( 1 + np.exp( - 5 * (epoch - c) / c ) )
-        kl_loss = 1e-3 * kl_anneal * kl_loss
+        
+        if anneal:
+            kl_loss = 1e-3 * kl_anneal * kl_loss
+        else:
+            kl_loss = 1e-3 * kl_loss
+            
         
         return kl_loss
+    
+    @staticmethod
+    def kl_sum(mu, logvar, ):
+        f=torch.sum
+        s=1
+        kl= -(0.5 / s) * f(torch.sum(1 + 2 * logvar - mu.pow(2) - logvar.exp().pow(2), 1))
+        return kl
     
     @staticmethod
     def f_recons(comb1, comb2):
@@ -147,7 +163,9 @@ class Loss:
     _base_alpha = 0.1
     
     def __init__(self, max_epochs):
-        self.max_epochs = max_epochs        
+        self.max_epochs = max_epochs  
+        self.mse = torch.nn.MSELoss()
+              
         self.alpha = {
             'kl_gex': self._base_alpha,
             'kl_pex': self._base_alpha,
@@ -159,7 +177,9 @@ class Loss:
             'spatial': self._base_alpha,
             'mutual_gex': self._base_alpha,
             'mutual_pex': self._base_alpha,
-            
+            'recons_img': self._base_alpha,
+            'kl_img': self._base_alpha,  
+            'cosine_img': self._base_alpha,          
         }
 
 
@@ -180,6 +200,10 @@ class Loss:
         buffer.mutual_info_loss = a['mutual_gex'] * LossFunctions.mutual_info_loss(varz.gex_pos_z, varz.gex_neg_z, varz.gex_summary, varz.gex_model_weight)
         buffer.mutual_info_loss = a['mutual_pex'] * LossFunctions.mutual_info_loss(varz.pex_pos_z, varz.pex_neg_z, varz.pex_summary, varz.pex_model_weight)
         
+        buffer.kl_loss_img = a['kl_img'] * LossFunctions.kl_sum(varz.img_mu, varz.img_logvar)
+        buffer.recons_loss_img = a['recons_img'] * self.mse(varz.img_recons, varz.img_input)
+        buffer.cosine_loss_img = a['cosine_img'] * LossFunctions.cosine_loss(varz.img_z, varz.img_c)
+                
         return buffer
 
 class NonSpatialLoss(Loss):

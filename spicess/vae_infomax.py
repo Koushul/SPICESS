@@ -5,10 +5,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
-
-from .modules.graph import GraphConvolution
 from .modules.inner_product import InnerProductDecoder
-from .modules.infomax import ContrastiveGraph
+from .modules.infomax import ContrastiveGraph, ContrastiveProjectionGraph
+from .modules.image_encoder import CNN_VAE
+
 
 class GraphEncoder(nn.Module):
     def __init__(self, in_channels, hidden_channels):
@@ -32,15 +32,43 @@ class InfoMaxVAE(nn.Module):
     def __init__(
         self,
         input_dim,
-        dropout=0,
-        latent_dim=32,
-        encoder_dim=128,
+        dropout = 0,
+        latent_dim = 32,
+        encoder_dim = 128,
+        kernel = 4, 
+        stride = 2, 
+        padding = 1, 
+        hidden1 = 64, 
+        hidden2 = 128, 
+        hidden3 = 128,
+        hidden4 = 128,
+        hidden5 = 96,
+        fc1 = 384,
+        nc = 1
     ):
         super().__init__()
 
         self.latent_dim = latent_dim
         self.encoder_dim = encoder_dim
         self.dropout = dropout
+        
+        self.image_encoder = CNN_VAE(
+            kernel, 
+            stride, 
+            padding, 
+            nc, 
+            hidden1, 
+            hidden2, 
+            hidden3, 
+            hidden4, 
+            hidden5, 
+            fc1,
+            latent_dim
+        )
+        
+        self.image_encoder.load_state_dict(torch.load('../workshop/cnn_vae_v1.pth'))
+        self.image_encoder.train()
+        
                 
         self.encoders = nn.ModuleList([
             ContrastiveGraph(
@@ -139,26 +167,30 @@ class InfoMaxVAE(nn.Module):
             logvars.append(logvar)
         return zs, mus, logvars
 
-    def combine(self, Z):
+    def combine(self, z1, z2, z3):
         """This moves correspondent latent embeddings 
         in similar directions over the course of training 
         and is key in the formation of similar latent spaces."""         
-        mZ = 0.5*(Z[0] + Z[1])        
-        return [mZ, mZ]
+        # mZ = 0.5*(Z[0] + Z[1])        
+        mZ = (1/3) * (z1+z2+z3)
+        return [mZ, mZ, mZ]
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(2)]
     
-    def forward(self, X, A):
+    def forward(self, X, Y, A):
         output = Namespace()
-        
-        # A = torch.eye(A.shape[0]).to(A.device)
-        
         gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary = self.encode(X, A)
+        
+        image_mu, image_logvar = self.image_encoder.encode(Y)
+        image_z = self.image_encoder.reparameterize(image_mu, image_logvar)
+        
         encoded = [gex_pos_z, pex_pos_z]
         zs, mus, logvars = self.refactor(encoded, A)
-        combined = self.combine(zs)
+        combined = self.combine(z1=zs[0], z2=zs[1], z3=image_z)
+        
         X_hat = self.decode(combined)
+        image_recons = self.image_encoder.decode(combined[0])
         output.adj_recon = self.adjacency(combined[0])      
 
         output.gex_z, output.pex_z = zs
@@ -172,9 +204,14 @@ class InfoMaxVAE(nn.Module):
         output.pex_model_weight = self.encoders[1].weight
         output.gex_mu, output.pex_mu = mus
         output.gex_logvar, output.pex_logvar = logvars
-        output.gex_c, output.pex_c = combined
+        output.gex_c, output.pex_c, output.img_c = combined
         output.gex_recons, output.pex_recons = X_hat
+        output.img_mu = image_mu
+        output.img_logvar = image_logvar
+        output.img_z = image_z
+        output.img_recons = image_recons
         output.gex_input, output.pex_input = X
+        output.img_input = Y
 
         return output
     
@@ -187,11 +224,7 @@ class InfoMaxVAE(nn.Module):
     @torch.no_grad()
     def impute(self, X, adj, enable_dropout=False, return_z=False):
         self.eval()
-        
-        # adj = torch.eye(adj.shape[0]).to(adj.device)
-        
-        
-        
+        self.image_encoder.eval()
         if enable_dropout:
             self.enable_dropout()
         edge_index = adj.nonzero().t().contiguous()
@@ -202,15 +235,3 @@ class InfoMaxVAE(nn.Module):
             return decoded.cpu().numpy(), z.cpu().numpy()       
             
         return decoded.cpu().numpy()
-    
-    
-    # @torch.no_grad()
-    # def impute(self, X, A, return_z=False):
-    #     self.eval()
-        
-    #     pos_z = self.encoders[0](X)
-    #     z = self.fc_mus[0](pos_z)
-    #     decoded = self.decoders[1](z)
-    #     if return_z:
-    #         return decoded.cpu().numpy(), z.cpu().numpy() 
-    #     return decoded.cpu().numpy()
