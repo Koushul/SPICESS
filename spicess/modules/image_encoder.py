@@ -4,19 +4,19 @@ import numpy as np
 
 class CNN_VAE(nn.Module):
 #adapted from https://github.com/uhlerlab/cross-modal-autoencoders
-    def __init__(self, kernel, stride, padding, nc, hidden1, hidden2, hidden3, hidden4, hidden5, fc1,fc2):
+    def __init__(self, kernel, stride, padding, nc, hidden1, hidden2, hidden3, hidden4, hidden5, fc1, fc2):
         super(CNN_VAE, self).__init__()
 
-        self.nc = nc
+        self.nc = nc #num channels
         self.hidden5=hidden5
-        self.fc1=fc1
-        self.fc2=fc2
+        self.fc1 = fc1
+        self.fc2 = fc2 #latent_dim
 
         self.encoder = nn.Sequential(
             # input is nc x imsize x imsize
+            nn.MaxPool2d(2, stride=2),
             nn.Conv2d(nc, hidden1, kernel, stride, padding, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
-            # state size. (hidden1) x imsize/stride^2
             nn.Conv2d(hidden1, hidden2, kernel, stride, padding, bias=False),
             nn.BatchNorm2d(hidden2),
             nn.LeakyReLU(0.2, inplace=True),
@@ -32,7 +32,7 @@ class CNN_VAE(nn.Module):
         )
 
         self.fcE1 = nn.Linear(fc1, fc2)
-        self.fcE2 = nn.Linear(fc1,fc2)
+        self.fcE2 = nn.Linear(fc1, fc2)
 
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(hidden5, hidden4, kernel, stride, padding, bias=False),

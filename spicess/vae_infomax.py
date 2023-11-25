@@ -10,6 +10,9 @@ from .modules.infomax import ContrastiveGraph, ContrastiveProjectionGraph
 from .modules.image_encoder import CNN_VAE
 
 
+
+pool = nn.MaxPool2d(2, stride=2)
+
 class GraphEncoder(nn.Module):
     def __init__(self, in_channels, hidden_channels):
         super(GraphEncoder, self).__init__()
@@ -35,6 +38,9 @@ class InfoMaxVAE(nn.Module):
         dropout = 0,
         latent_dim = 32,
         encoder_dim = 128,
+        use_hist = True,
+        pretrained = None,
+        freeze_encoder = True,
         kernel = 4, 
         stride = 2, 
         padding = 1, 
@@ -44,6 +50,7 @@ class InfoMaxVAE(nn.Module):
         hidden4 = 128,
         hidden5 = 96,
         fc1 = 384,
+        # fc1 = 1536,
         nc = 1
     ):
         super().__init__()
@@ -51,23 +58,41 @@ class InfoMaxVAE(nn.Module):
         self.latent_dim = latent_dim
         self.encoder_dim = encoder_dim
         self.dropout = dropout
+        self.use_hist = use_hist
         
-        self.image_encoder = CNN_VAE(
-            kernel, 
-            stride, 
-            padding, 
-            nc, 
-            hidden1, 
-            hidden2, 
-            hidden3, 
-            hidden4, 
-            hidden5, 
-            fc1,
-            latent_dim
-        )
+
         
-        self.image_encoder.load_state_dict(torch.load('../workshop/cnn_vae_v1.pth'))
-        self.image_encoder.train()
+        if self.use_hist:
+            
+            self.image_encoder = CNN_VAE(
+                kernel, 
+                stride, 
+                padding, 
+                nc, 
+                hidden1, 
+                hidden2, 
+                hidden3, 
+                hidden4, 
+                hidden5, 
+                fc1,
+                latent_dim
+            )
+            
+            if pretrained:
+                self.image_encoder.load_state_dict(torch.load(pretrained))
+            
+                if freeze_encoder:
+                    for param in self.image_encoder.encoder.parameters():
+                        param.requires_grad = False #freeze
+                
+            # for name, param in self.image_encoder.named_parameters():
+            #     if 'fc' in name:
+            #         param.requires_grad = True
+                    
+            # for param in self.image_encoder.decoder.parameters():
+            #     param.requires_grad = True
+            
+            self.image_encoder.train()
         
                 
         self.encoders = nn.ModuleList([
@@ -167,33 +192,50 @@ class InfoMaxVAE(nn.Module):
             logvars.append(logvar)
         return zs, mus, logvars
 
-    def combine(self, z1, z2, z3):
+    def combine(self, Zs):
         """This moves correspondent latent embeddings 
         in similar directions over the course of training 
         and is key in the formation of similar latent spaces."""         
-        # mZ = 0.5*(Z[0] + Z[1])        
-        mZ = (1/3) * (z1+z2+z3)
-        return [mZ, mZ, mZ]
+        
+        if self.use_hist:
+            mZ = (1/3) * (Zs[0] + Zs[1] + Zs[2])
+            return [mZ, mZ, mZ]
+        
+        mZ = 0.5*(Zs[0] + Zs[1])        
+        return [mZ, mZ]
+        
+
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(2)]
     
-    def forward(self, X, Y, A):
+    def forward(self, X, A, Y=None):
         output = Namespace()
+        
+        # assert self.use_hist or Y is not None, 'Image input is required'
+        
         gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary = self.encode(X, A)
         
-        image_mu, image_logvar = self.image_encoder.encode(Y)
-        image_z = self.image_encoder.reparameterize(image_mu, image_logvar)
+        if self.use_hist:
+            image_mu, image_logvar = self.image_encoder.encode(Y)
+            image_z = self.image_encoder.reparameterize(image_mu, image_logvar)
         
         encoded = [gex_pos_z, pex_pos_z]
         zs, mus, logvars = self.refactor(encoded, A)
-        combined = self.combine(z1=zs[0], z2=zs[1], z3=image_z)
+        if self.use_hist:
+            zs.append(image_z)
+            
+        combined = self.combine(zs)
         
         X_hat = self.decode(combined)
-        image_recons = self.image_encoder.decode(combined[0])
+        
+        if self.use_hist:
+            image_recons = self.image_encoder.decode(combined[0])
+            
         output.adj_recon = self.adjacency(combined[0])      
 
-        output.gex_z, output.pex_z = zs
+        output.gex_z = zs[0] 
+        output.pex_z = zs[1]
         output.gex_pos_z = gex_pos_z
         output.pex_pos_z = pex_pos_z
         output.gex_neg_z = gex_neg_z
@@ -204,14 +246,20 @@ class InfoMaxVAE(nn.Module):
         output.pex_model_weight = self.encoders[1].weight
         output.gex_mu, output.pex_mu = mus
         output.gex_logvar, output.pex_logvar = logvars
-        output.gex_c, output.pex_c, output.img_c = combined
+        output.gex_c = combined[0]
+        output.pex_c = combined[1]
         output.gex_recons, output.pex_recons = X_hat
-        output.img_mu = image_mu
-        output.img_logvar = image_logvar
-        output.img_z = image_z
-        output.img_recons = image_recons
+
         output.gex_input, output.pex_input = X
-        output.img_input = Y
+        
+        if self.use_hist:
+            output.img_mu = image_mu
+            output.img_logvar = image_logvar
+            output.img_z = image_z
+            output.img_input = pool(Y)
+            output.img_recons = image_recons
+            output.img_c = combined[2]
+            output.use_hist = self.use_hist 
 
         return output
     
@@ -220,17 +268,43 @@ class InfoMaxVAE(nn.Module):
         for m in self.modules():
             if m.__class__.__name__.startswith('Dropout'):
                 m.train()
+                
+                
+    @torch.no_grad()
+    def get_embeddings(self, X, adj):
+        self.eval()
+        edge_index = adj.nonzero().t().contiguous()
+        pos_z, _, _ = self.encoders[0](X, edge_index)
+        z = self.fc_mus[0](pos_z)
+        return z.cpu().numpy()
     
     @torch.no_grad()
     def impute(self, X, adj, enable_dropout=False, return_z=False):
         self.eval()
-        self.image_encoder.eval()
         if enable_dropout:
             self.enable_dropout()
         edge_index = adj.nonzero().t().contiguous()
         pos_z, _, _ = self.encoders[0](X, edge_index)
         z = self.fc_mus[0](pos_z)
         decoded = self.decoders[1](z)
+        if return_z:
+            return decoded.cpu().numpy(), z.cpu().numpy()       
+            
+        return decoded.cpu().numpy()
+        
+    @torch.no_grad()
+    def img2proteins(self, Y, enable_dropout=False, return_z=False):                
+        # self.eval()
+        # self.image_encoder.eval()
+        
+        if enable_dropout:
+            self.enable_dropout()
+        
+        mu, logvar = self.image_encoder.encode(Y)
+        z = self.image_encoder.reparameterize(mu, logvar)
+        decoded = self.decoders[1](z)
+
+            
         if return_z:
             return decoded.cpu().numpy(), z.cpu().numpy()       
             
