@@ -97,7 +97,8 @@ def plot_umap_grid(
 
     for ix, ax in enumerate(axs):
             
-        sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
+        sns.scatterplot(x=emb[:, 0], y=emb[:, 1], 
+            hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
         
         try:
             _, name, desc = antibody_panel[antibody_panel.name==protein_names[ix].replace('-A', '')].values[0]
@@ -162,9 +163,9 @@ def plot_latent(
             red = cuml.UMAP(
                 n_components=n_components,
                 n_neighbors=min(200, dat.shape[0] - 1) if n_neighbors is None else n_neighbors,
-                learning_rate=min_dist,
+                learning_rate=learning_rate,
                 min_dist=min_dist,
-                spread=spread,
+                spread=spread, 
                 local_connectivity=local_connectivity,
                 repulsion_strength=repulsion_strength,
                 random_state=seed)

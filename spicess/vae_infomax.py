@@ -38,7 +38,7 @@ class InfoMaxVAE(nn.Module):
         dropout = 0,
         latent_dim = 32,
         encoder_dim = 128,
-        use_hist = True,
+        use_hist = False,
         pretrained = None,
         freeze_encoder = True,
         kernel = 4, 
@@ -75,7 +75,8 @@ class InfoMaxVAE(nn.Module):
                 hidden4, 
                 hidden5, 
                 fc1,
-                latent_dim
+                latent_dim,
+                # cond_dim=input_dim[0]
             )
             
             if pretrained:
@@ -108,19 +109,34 @@ class InfoMaxVAE(nn.Module):
                 corruption=corruption),
         ])
         
-        
         dim1, dim2 = input_dim
+        
+        
+        # self.encoders = nn.ModuleList([
+        #     nn.Sequential(
+        #         nn.Linear(dim1, encoder_dim),
+        #         nn.BatchNorm1d(encoder_dim),
+        #         nn.LeakyReLU(),
+        #     ),
+        #     nn.Sequential(
+        #         nn.Linear(dim2, encoder_dim),
+        #         nn.BatchNorm1d(encoder_dim),
+        #         nn.LeakyReLU(),
+        #     ),
+        # ])
+        
+        
                 
         self.fc_mus = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             ),
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             )
         ])
     
@@ -128,12 +144,12 @@ class InfoMaxVAE(nn.Module):
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             ),
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             )
         ])
         
@@ -141,30 +157,51 @@ class InfoMaxVAE(nn.Module):
             nn.Sequential(
                 nn.Linear(latent_dim, dim1),
                 nn.BatchNorm1d(dim1),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(dim1, 2*dim1),
                 nn.BatchNorm1d(2*dim1),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(2*dim1, dim1),
+                nn.Sigmoid()
             ), 
             nn.Sequential(
                 nn.Linear(latent_dim, dim2),
                 nn.BatchNorm1d(dim2),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(dim2, 2*dim2),
                 nn.BatchNorm1d(2*dim2),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(2*dim2, dim2),
+                nn.Sigmoid()
             ), 
         ])
         
         self.adjacency = InnerProductDecoder(
             dropout=dropout, 
             act=lambda x: x)
+        
+    def freeze_all(self):
+        for param in self.parameters():
+            param.requires_grad = False
+    
+    def unfreeze_all(self):
+        for param in self.parameters():
+            param.requires_grad = True
+            
+    def unfreeze_gene_vae(self):
+        
+        params = []
+        params.extend(self.encoders[0].parameters())
+        params.extend(self.fc_mus[0].parameters())
+        params.extend(self.fc_vars[0].parameters())
+        params.extend(self.decoders[0].parameters())
+        
+        for param in params:
+            param.requires_grad = True            
 
     def encode(self, X, A):
         edge_index = A.nonzero().t().contiguous()
@@ -172,8 +209,15 @@ class InfoMaxVAE(nn.Module):
         pex_pos_z, pex_neg_z, pex_summary = self.encoders[1](X[1], edge_index)                
         return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
     
+    # def encode(self, X):
+    #     enc_a = self.encoders[0](X[0])
+    #     enc_b = self.encoders[1](X[1])                
+    #     return [enc_a, enc_b]
+
+    
+
         
-    def refactor(self, X, A):
+    def refactor(self, X):
         index = range(2)
         zs = []
         mus = []
@@ -208,6 +252,26 @@ class InfoMaxVAE(nn.Module):
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(2)]
+
+
+    # def forward(self, X, A=None):
+    #     output = Namespace()        
+    #     enc_g, enc_p = self.encode(X)
+    #     encoded = [enc_g, enc_p]
+    #     zs, mus, logvars = self.refactor(encoded)
+    #     combined = self.combine(zs)
+    #     X_hat = self.decode(combined)
+
+    #     output.gex_z, output.pex_z = zs
+    #     output.gex_pos_z = enc_g
+    #     output.gex_mu, output.pex_mu = mus
+    #     output.gex_logvar, output.pex_logvar = logvars
+    #     output.gex_c, output.pex_c = combined
+    #     output.gex_recons, output.pex_recons = X_hat
+    #     output.gex_input, output.pex_input = X
+
+    #     return output
+
     
     def forward(self, X, A, Y=None):
         output = Namespace()
@@ -217,11 +281,14 @@ class InfoMaxVAE(nn.Module):
         gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary = self.encode(X, A)
         
         if self.use_hist:
+            # background = self.image_encoder.fc_cond(X[0])
+            # image_mu, image_logvar = self.image_encoder.encode(Y, background)
             image_mu, image_logvar = self.image_encoder.encode(Y)
+            
             image_z = self.image_encoder.reparameterize(image_mu, image_logvar)
         
         encoded = [gex_pos_z, pex_pos_z]
-        zs, mus, logvars = self.refactor(encoded, A)
+        zs, mus, logvars = self.refactor(encoded)
         if self.use_hist:
             zs.append(image_z)
             
@@ -293,13 +360,15 @@ class InfoMaxVAE(nn.Module):
         return decoded.cpu().numpy()
         
     @torch.no_grad()
-    def img2proteins(self, Y, enable_dropout=False, return_z=False):                
+    def img2proteins(self, X, Y, enable_dropout=False, return_z=False):                
         # self.eval()
-        # self.image_encoder.eval()
+        self.image_encoder.eval()
         
         if enable_dropout:
             self.enable_dropout()
         
+        # background = self.image_encoder.fc_cond(X)
+        # mu, logvar = self.image_encoder.encode(Y, background)
         mu, logvar = self.image_encoder.encode(Y)
         z = self.image_encoder.reparameterize(mu, logvar)
         decoded = self.decoders[1](z)

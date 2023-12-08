@@ -91,7 +91,7 @@ class Pipeline:
 #         adata_cm = AnnData.concatenate(self.adata.copy(), self.adata2.copy(), join='inner')
 #         adata_cyt = up.Run(
 #             name=self.tissue, 
-#             adatas=[adata_cm], 
+#             adatas=[adata_cm], sp
 #             adata_cm =adata_cm, 
 #             lambda_s=1.0, 
 #             out='project',
@@ -405,7 +405,7 @@ class FeaturizePipeline(Pipeline):
             layer_added = self.layer_added
             
             
-        sc.pp.normalize_total(adata, inplace=True)
+        sc.pp.normalize_total(adata, inplace=True, target_sum=1e6)
         
         if layer_used is None:
             features = csr_matrix(adata.X).toarray()
@@ -444,6 +444,9 @@ class FeaturizePipeline(Pipeline):
         
         
         return adata
+    
+# class 
+    
 class InferencePipeline(Pipeline):
     
     def __init__(self, config_pth=None, model = None, tissue=None, proteins=None):
@@ -535,7 +538,7 @@ class TrainModelPipeline(Pipeline):
             lr: float = 2e-3, 
             wd: float = 0.0,
             patience: int = 300,
-            delta: float = 1e-3,
+            delta: float = 1e-5,
             epochs: int = 5000,
             kl_gex: float = 1e-6, 
             kl_pex: float = 1e-6,
@@ -552,6 +555,7 @@ class TrainModelPipeline(Pipeline):
             mutual_gex: float = 1e-3, 
             mutual_pex: float = 1e-3,
             batch_size: int = 8,
+            use_annealing: bool = False,
             cross_validate: bool = True,
             use_histology: bool = False,
             pretrained: str = None,
@@ -580,7 +584,7 @@ class TrainModelPipeline(Pipeline):
         self.gene_featurizer = FeaturizePipeline(clr=False, min_max=True, log=True)
         self.protein_featurizer = FeaturizePipeline(clr=True, min_max=True, log=False)
         
-        self.loss_func = Loss(max_epochs=epochs, use_hist=use_histology)
+        self.loss_func = Loss(max_epochs=epochs, use_hist=use_histology, use_annealing=use_annealing)
 
         self.loss_func.alpha = {
             'kl_gex': kl_gex,
@@ -641,7 +645,7 @@ class TrainModelPipeline(Pipeline):
         return a1, a2
     
     
-    def plot_losses(self):
+    def plot_losses(self, width=22, height=10, dpi=160):
         
         colors = ["#b357c2",
         "#82b63c",
@@ -659,12 +663,11 @@ class TrainModelPipeline(Pipeline):
         "#b9606c",
         "#a46737"]
 
-        f, axs = plt.subplots(3, 4, figsize=(22, 10), dpi=160)
+        f, axs = plt.subplots(3, 4, figsize=(width, height), dpi=dpi)
 
-        ordered_losses = ['cosine_loss_gex', 'cosine_loss_pex', 'kl_loss_gex', 
-                        'recons_loss_gex', 'mutual_info_loss', 'alignment_loss', 
-                        'kl_loss_pex', 'recons_loss_pex', 'adj_loss', 'oracle',
-                        'spatial_loss', 'oracle_self']
+        ordered_losses = ['cosine_loss_gex', 'recons_loss_gex', 'kl_loss_gex', 'spatial_loss', 
+                        'cosine_loss_pex', 'recons_loss_pex', 'kl_loss_pex', 'adj_loss',
+                        'alignment_loss', 'mutual_info_loss', 'oracle', 'oracle_self']
 
         for i, (loss_name, ax) in enumerate(zip(ordered_losses, axs.flatten())):
             ax.plot(self.metrics.values.__dict__[loss_name], color=colors[i])
@@ -727,6 +730,7 @@ class TrainModelPipeline(Pipeline):
         self.protein_featurizer.run(pdata_train)
         self.protein_featurizer.run(pdata_eval)
         
+        ## TODO: Do we still need this?
         # self.pca = PCA(self.pca_dim).fit(adata_train.obsm['normalized'])
         
         if self.pca_dim:
@@ -739,8 +743,7 @@ class TrainModelPipeline(Pipeline):
         d11 = floatify(adata_train.obsm['normalized'])
         d12 = floatify(pdata_train.obsm['normalized'])
         d13 = floatify(adata_eval.obsm['normalized'])
-        d14 = floatify(pdata_eval.obsm['normalized'])
-        
+        d14 = floatify(pdata_eval.obsm['normalized'])        
         
         adj_label = floatify(pdata_train.obsm['adj_label'])
         pos_weight = floatify(pdata_train.uns['pos_weight'])
@@ -753,9 +756,7 @@ class TrainModelPipeline(Pipeline):
         slicer_train = ImageSlicer(adata_train, size=64, grayscale=True)
 
         Y = floatify(np.stack([slicer_train(i) for i in range(len(slicer_train))])).transpose(1, -1).unsqueeze(1)
-        
-        print(d11.shape)
-        
+                
         model = InfoMaxVAE([d11.shape[1], d12.shape[1]], 
                     latent_dim = self.latent_dim,
                     use_hist = self.use_histology,
@@ -771,6 +772,7 @@ class TrainModelPipeline(Pipeline):
         test_protein = d14[:, :].data.cpu().numpy()
                 
         with tqdm(total=self.epochs, disable=label!='Training') as pbar:
+            pbar.set_postfix_str(f'{d11.shape[1]}d -> {self.latent_dim}d')
             for e in range(self.epochs):
                 
                 model.train()
@@ -803,8 +805,12 @@ class TrainModelPipeline(Pipeline):
                 oracle_self = np.mean(column_corr(d12[:, :].data.cpu().numpy(), model.impute(d11, A)))
                 self.metrics.update_value('oracle_self', oracle_self, track=True)
                 
+                if e % 100 == 0:
+                    self_recovery = np.mean(column_corr(d11[:, :].data.cpu().numpy(), output.gex_recons.data.cpu().numpy()))
+                    self.metrics.update_value('self_recovery', self_recovery, track=True)
+                                
                 if self.use_histology: 
-                    imputed_from_img = model.img2proteins(Y)
+                    imputed_from_img = model.img2proteins(d11, Y)
                     oracle_img = np.mean(column_corr(d12[:, :].data.cpu().numpy(), imputed_from_img))
                     self.metrics.update_value('oracle_img', oracle_img, track=True)
                 
@@ -821,7 +827,9 @@ class TrainModelPipeline(Pipeline):
                 desc_str+=f"Imputation: {self.metrics.means.oracle:.3f} | "
                 desc_str+=f"SelfImputation: {self.metrics.means.oracle_self:.3f} | "
                 desc_str+=f"Loss: {np.mean(losses):.3g} | "
-                desc_str+=f"Alignment: {self.metrics.means.alignment_loss:.3g}"
+                desc_str+=f"Alignment: {self.metrics.means.alignment_loss:.3g} | "
+                desc_str+=f"Recovery: {self.metrics.means.self_recovery:.3f}"
+                
                 
                 pbar.update()        
                 pbar.set_description(desc_str)  

@@ -4,13 +4,16 @@ import numpy as np
 
 class CNN_VAE(nn.Module):
 #adapted from https://github.com/uhlerlab/cross-modal-autoencoders
-    def __init__(self, kernel, stride, padding, nc, hidden1, hidden2, hidden3, hidden4, hidden5, fc1, fc2):
-        super(CNN_VAE, self).__init__()
+    def __init__(self, kernel, stride, padding, nc, 
+            hidden1, hidden2, hidden3, hidden4, hidden5, fc1, fc2, cond_dim=0, dropout=0.1):
+        super().__init__()
 
         self.nc = nc #num channels
         self.hidden5=hidden5
         self.fc1 = fc1
         self.fc2 = fc2 #latent_dim
+        self.cond_dim = cond_dim
+        self.dropout = dropout
 
         self.encoder = nn.Sequential(
             # input is nc x imsize x imsize
@@ -31,8 +34,24 @@ class CNN_VAE(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
         )
 
-        self.fcE1 = nn.Linear(fc1, fc2)
-        self.fcE2 = nn.Linear(fc1, fc2)
+        self.fc_mus = nn.Sequential(
+            nn.Linear(fc1, fc2),
+            nn.BatchNorm1d(fc2),
+            nn.Mish(),
+        )
+        
+        self.fc_vars = nn.Sequential(
+            nn.Linear(fc1, fc2),
+            nn.BatchNorm1d(fc2),
+            nn.Mish(),
+        )
+        
+        if self.cond_dim > 0:
+            self.fc_cond = nn.Sequential(
+                nn.Linear(cond_dim, 16),
+                nn.BatchNorm1d(16),
+                nn.Mish(),
+            )
 
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(hidden5, hidden4, kernel, stride, padding, bias=False),
@@ -53,15 +72,20 @@ class CNN_VAE(nn.Module):
 
         self.fcD1 = nn.Sequential(
             nn.Linear(fc2, fc1),
-            nn.ReLU(inplace=True),
-            )
+            nn.BatchNorm1d(fc1),
+            nn.Mish(inplace=True),
+        )
 
-    def encode(self, x):
+    def encode(self, x, c=None):
         h = self.encoder(x)
         if torch.isnan(torch.sum(h)):
             print('convolution exploded')
         h = h.view(-1, h.size()[1]*h.size()[2]*h.size()[3])
-        return self.fcE1(h), self.fcE2(h)
+        
+        if c is not None:
+            h = torch.cat((h, c), dim=1)
+        
+        return self.fc_mus(h), self.fc_vars(h)
 
     def reparameterize(self, mu, logvar):
         if self.training:
@@ -75,9 +99,12 @@ class CNN_VAE(nn.Module):
         h = self.fcD1(z)
         h = h.view(-1, self.hidden5, int(np.sqrt(self.fc1/self.hidden5)), int(np.sqrt(self.fc1/self.hidden5)))
         return self.decoder(h)
+    
 
-    def forward(self, x):
-        mu, logvar = self.encode(x)
+    def forward(self, x, c=None):
+        if c is not None:
+            c = self.fc_cond(c)
+        mu, logvar = self.encode(x, c)
         z = self.reparameterize(mu, logvar)
         res = self.decode(z)
         return res, z, mu, logvar

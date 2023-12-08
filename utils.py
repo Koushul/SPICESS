@@ -330,3 +330,31 @@ def clean_adata(adata):
         'total_counts_mt', 'log1p_total_counts_mt', 'pct_counts_mt']:
         if o in adata.obs.columns:
             del adata.obs[o]
+            
+            
+def cluster(a, res, layer=None):
+    sc.pp.neighbors(a, use_rep=layer)
+    sc.tl.leiden(a, resolution=res)
+    if 'leiden_colors' in a.uns:
+        a.uns.pop('leiden_colors')
+        
+def align_adata(target, reference, fill_strategy=0, mock=False):
+    if mock:
+        return target
+    if fill_strategy == 'random':
+        fill_value = np.random.randn(1)[0]
+    else:
+        fill_value = fill_strategy
+    df = target.to_df()
+    df = df[df.columns[df.columns.isin(reference.var_names)]]
+    
+    counter = 0
+    for c in set(reference.var_names).difference(df.columns):
+        df[c] = fill_value
+        counter+=1
+        
+    print(f'Filled {counter} genes with {fill_value}')
+    rdata = AnnData(X=df, obs=target.obs, uns=target.uns)
+    rdata.obsm['spatial'] = target.obsm['spatial']
+    
+    return rdata
