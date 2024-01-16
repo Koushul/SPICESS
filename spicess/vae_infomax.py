@@ -76,7 +76,6 @@ class InfoMaxVAE(nn.Module):
                 hidden5, 
                 fc1,
                 latent_dim,
-                # cond_dim=input_dim[0]
             )
             
             if pretrained:
@@ -323,7 +322,7 @@ class InfoMaxVAE(nn.Module):
             output.img_mu = image_mu
             output.img_logvar = image_logvar
             output.img_z = image_z
-            output.img_input = pool(Y)
+            output.img_input = Y
             output.img_recons = image_recons
             output.img_c = combined[2]
             output.use_hist = self.use_hist 
@@ -360,21 +359,18 @@ class InfoMaxVAE(nn.Module):
         return decoded.cpu().numpy()
         
     @torch.no_grad()
-    def img2proteins(self, X, Y, enable_dropout=False, return_z=False):                
+    def img2proteins(self, Y):                
         # self.eval()
         self.image_encoder.eval()
         
-        if enable_dropout:
-            self.enable_dropout()
+        # if enable_dropout:
+        #     self.enable_dropout()
         
         # background = self.image_encoder.fc_cond(X)
         # mu, logvar = self.image_encoder.encode(Y, background)
+                
         mu, logvar = self.image_encoder.encode(Y)
         z = self.image_encoder.reparameterize(mu, logvar)
         decoded = self.decoders[1](z)
-
-            
-        if return_z:
-            return decoded.cpu().numpy(), z.cpu().numpy()       
             
         return decoded.cpu().numpy()

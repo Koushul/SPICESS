@@ -242,10 +242,16 @@ class Loss:
             buffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(
                 varz.gex_z, varz.pex_z, varz.img_z, varz.gex_sp_dist)
             buffer.kl_loss_img = a['kl_img'] * LossFunctions.kl_sum(varz.img_mu, varz.img_logvar)
+            
             buffer.recons_loss_img = a['recons_img'] * LossFunctions.bce_flat(varz.img_recons, varz.img_input, reduction='mean')
             buffer.cosine_loss_img = a['cosine_img'] * LossFunctions.cosine_loss(varz.img_z, varz.img_c)
+            
             buffer.alignment_loss = a['align'] * (
-                self.mse(varz.gex_z, varz.pex_z) + self.mse(varz.gex_z, varz.img_z) + self.mse(varz.img_z, varz.pex_z))
+                self.mse(varz.gex_z, varz.pex_z) + \
+                self.mse(varz.gex_z, varz.img_z) + \
+                self.mse(varz.img_z, varz.pex_z)
+            )
+            
             
         return buffer
 

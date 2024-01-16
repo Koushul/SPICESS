@@ -145,6 +145,7 @@ def plot_latent(
     min_dist=0.1,
     spread=1.0,
     local_connectivity=1.0,
+    linewidth = 1.0,
     repulsion_strength=1.0,
 ):
     method_names = {'pca': 'PC', 'umap': 'UMAP'}
@@ -180,7 +181,7 @@ def plot_latent(
         for ix, l in enumerate(unique_labels):
             data_subset = np.transpose(plot_data[lab == l])
 
-            scatter = ax.scatter(*data_subset, label=l, edgecolor=edgecolor, color=colors[ix], s=size)
+            scatter = ax.scatter(*data_subset, label=l, edgecolor=edgecolor, color=colors[ix], s=size, linewidth=linewidth)
         fig = plt.gcf()
         # if i == 1 and legend:
         #     fig.legend(scatter, labels=unique_labels, bbox_to_anchor=(0.5, -0.05), loc='lower center', ncols=7)
@@ -195,6 +196,8 @@ def plot_latent(
         ax.spines['top'].set_visible(False)
         ax.spines['left'].set_visible(False)
         ax.spines['bottom'].set_visible(False)
+        
+        ax.set_facecolor('black')
         
     if not separate_dim:
         axs_xlim = np.array([ax.get_xlim() for ax in axs])

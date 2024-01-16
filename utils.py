@@ -353,7 +353,7 @@ def align_adata(target, reference, fill_strategy=0, mock=False):
         df[c] = fill_value
         counter+=1
         
-    print(f'Filled {counter} genes with {fill_value}')
+    # print(f'Filled {counter} genes with {fill_value}')
     rdata = AnnData(X=df, obs=target.obs, uns=target.uns)
     rdata.obsm['spatial'] = target.obsm['spatial']
     
