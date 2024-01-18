@@ -50,6 +50,9 @@ class LossFunctions:
     
     @staticmethod
     def bce_flat(reconstructed, data, reduction='sum'):
+        reconstructed = reconstructed.clip(min=0, max=1)
+        data = data.clip(min=0, max=1)
+        
         return F.binary_cross_entropy(reconstructed.view(-1), data.view(-1), reduction=reduction)
     
     @staticmethod

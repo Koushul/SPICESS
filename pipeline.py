@@ -25,6 +25,8 @@ import glob
 from sklearn.decomposition import PCA
 from PIL import Image
 import uniport as up
+from sklearn.cluster import KMeans
+
 
 class CleanExit:
     def __enter__(self):
@@ -262,7 +264,7 @@ class LoadCytAssistPipeline(Pipeline):
         else:
             self.geneset = None
             
-        print('Created CytAssist data loader pipeline.')
+        # print('Created CytAssist data loader pipeline.')
         
         
     def load_data(self, h5_file: str, return_raw=False) -> Tuple[AnnData, AnnData]:
@@ -309,6 +311,8 @@ class LoadCytAssistPipeline(Pipeline):
         
     def __call__(self):
         return self.run()
+    
+    
 class BulkCytAssistLoaderPipeline(Pipeline):
     def __init__(self, tissue: str, data_dir: str, geneset: str = None):
         self.tissue = tissue
@@ -331,6 +335,11 @@ class BulkCytAssistLoaderPipeline(Pipeline):
     
     def run(self, i):
         return self.loaders[i].run()
+    
+    def plot(self):
+        for i in range(len(self.fnames)):
+            adata, pdata = self.run(i)
+            sc.pl.spatial(adata, title=f'{self.tissue} Sample {i}')
 
 class FeaturizePipeline(Pipeline):
     """
@@ -375,7 +384,7 @@ class FeaturizePipeline(Pipeline):
         
         pos_weight = float(adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum()
         norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
-        adj_norm = preprocess_graph(adj)
+        adj_norm = preprocess_graph(adj).to_dense().numpy()
         coords = torch.tensor(spatial_coords).float()
         sp_dists = torch.cdist(coords, coords, p=2)
         
@@ -398,10 +407,9 @@ class FeaturizePipeline(Pipeline):
         
         # adata = adata.copy()
             
-        if 'train_test' not in adata.obs:
-            train_test_split(adata)
+        # if 'train_test' not in adata.obs:
+        #     train_test_split(adata)
             
-
             
         if clr is None:
             clr = self.clr
@@ -413,8 +421,7 @@ class FeaturizePipeline(Pipeline):
             layer_added = self.layer_added
         if minmax_vertical is None:
             minmax_vertical = self.minmax_vertical
-            
-            
+                            
         sc.pp.normalize_total(adata, inplace=True, target_sum=1e6)
         
         if layer_used is None:
@@ -436,6 +443,7 @@ class FeaturizePipeline(Pipeline):
             features = scaler.fit_transform(features)
             
         adata.obsm[layer_added] = np.array(features)
+        adata.layers[layer_added] = np.array(features)
         
         
         # if resolution is not None:
@@ -453,6 +461,7 @@ class FeaturizePipeline(Pipeline):
         adata.uns['pos_weight'] = pos_weight
         adata.uns['norm'] = norm
         
+        adata.X = adata.layers['counts']
         
         return adata
     
@@ -494,7 +503,7 @@ class InferencePipeline(Pipeline):
         
     def ingest(self, adata):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        d13 = floatify(adata.obsm['latent'])
+        d13 = floatify(adata.obsm['normalized'])
         adj = graph_alpha(adata.obsm['spatial'], n_neighbors=6)
         adj_label = adj + sp.eye(adj.shape[0])
         adj_label = torch.tensor(adj_label.toarray()).to(device)
@@ -513,7 +522,7 @@ class InferencePipeline(Pipeline):
         scaler = MinMaxScaler()
 
         d13, A2 = self.ingest(adatax)
-        imputed_proteins, z_latent = self.model.impute(d13, A2, return_z=True)
+        imputed_proteins, z_latent, gex_recons = self.model.impute(d13, A2, return_z=True)
 
         if normalize:
             proteins_norm = pd.DataFrame(scaler.fit_transform(imputed_proteins), 
@@ -529,8 +538,11 @@ class InferencePipeline(Pipeline):
         pdata_eval.obsm['spatial'] = adatax.obsm['spatial']
         pdata_eval.uns['spatial'] = adatax.uns['spatial']
         pdata_eval.obsm['embeddings'] = z_latent
+        pdata_eval.obsm['gex_recons'] = gex_recons
         
         return pdata_eval
+    
+    
 class TrainModelPipeline(Pipeline):
     """
     Pipeline for training a model using matched spatial gene expression and protein expression data.
@@ -647,6 +659,12 @@ class TrainModelPipeline(Pipeline):
         
         return a1, a2
     
+
+    def assign_groups(self, coordinates, group_size=10):
+        kmeans = KMeans(n_clusters=group_size)
+        kmeans.fit(coordinates)
+        return kmeans.labels_
+    
     
     def plot_losses(self, width=22, height=10, dpi=160):
         
@@ -682,48 +700,59 @@ class TrainModelPipeline(Pipeline):
             
     
     
-    def run(self, show_for=None):
+    def run(self):
         output = Namespace()
         if self.cross_validate:
-            train_test_split(self.adata)
-            train_test_split(self.pdata)
-            imputed_concat = np.ones((self.adata.shape[0], self.pdata.shape[1]))
-            real_concat = np.ones((self.adata.shape[0], self.pdata.shape[1]))
             
-            pbar = tqdm(total=len(self.adata.obs.train_test.unique()), desc='Cross-Validating')
+            adata = self.adatas[0].copy()
+            pdata = self.pdatas[0].copy()
+            groups = self.assign_groups(adata.obsm['spatial'], 2)
+            adata.obs['train_test'] = groups
+            adata.obs['train_test'] = adata.obs['train_test'].astype('category')
+            adata.obs['idx'] = list(range(0, len(adata)))
+            pdata.obs['idx'] = list(range(0, len(pdata)))
+            pdata.obs['train_test'] = adata.obs['train_test']
+            
+            imputed_concat = np.ones((adata.shape[0], pdata.shape[1]))
+            real_concat = np.ones((adata.shape[0], pdata.shape[1]))
+            
                 
-            for segment in self.adata.obs.train_test.unique():
-                a_train, a_eval = self.subset_adata(self.adata, segment=segment)
-                p_train, p_eval = self.subset_adata(self.pdata, segment=segment)
-                pbar.update()        
-                out, _ = self.train(a_train, p_train, a_eval, p_eval, label=f'Patch: {segment}', show_for=show_for)
+            for segment in adata.obs.train_test.unique():                
+                a_train, a_eval = self.subset_adata(adata.copy(), segment=segment)
+                p_train, p_eval = self.subset_adata(pdata.copy(), segment=segment)
+                out, _ = self.train(a_train, p_train, a_eval, p_eval, label=f'Patch: {segment}')
+                print(segment, out.results.values)
+                
                 imputed_concat[a_eval.obs.idx.values, :] = out.imputed_proteins
                 real_concat[a_eval.obs.idx.values, :] = out.d14[:, :].data.cpu().numpy()
                 
             corr = np.mean(column_corr(imputed_concat, real_concat))
-            pbar.set_description(f'Cross-Validation: {corr:.3f}')
-            pbar.close()
+            print('Final correlation: ', corr)  
+            
+            output.imputed_proteins = imputed_concat
+            output.real_proteins = real_concat
+                      
             
         # with CleanExit():
         #     output, artifacts = self.train(self.adata, self.pdata, self.adata_eval, self.pdata_eval)
         # output, artifacts = self.train(self.adata_eval, self.pdata_eval, self.adata, self.pdata)
-        
-        output, artifacts = self.train(self.adatas[0], self.pdatas[0], self.adatas[1], self.pdatas[1])
-        
-        # output, artifacts = self.train_multi(self.adatas, self.pdatas)
-        
-        
-        ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
-        name = f'{self.tissue}_{ts}'
-        
-        if self.save:
-            torch.save(output.model.state_dict(), f'../model_zoo/model_{name}.pth')
-            artifacts.model = f'model_{name}.pth'
-            artifacts.proteins = list(self.pdatas[0].var_names)
-            with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
-                yaml.dump(vars(self.artifacts), f)
+        else:
+            output, artifacts = self.train(self.adatas[0], self.pdatas[0], self.adatas[1], self.pdatas[1])
             
-            print(f'Saved model-config to ../model_zoo/config_{name}.yaml')
+            # output, artifacts = self.train_multi(self.adatas, self.pdatas)
+            
+            
+            ts = datetime.now().strftime("%Y_%m_%d_%H_%M")
+            name = f'{self.tissue}_{ts}'
+            
+            if self.save:
+                torch.save(output.model.state_dict(), f'../model_zoo/model_{name}.pth')
+                artifacts.model = f'model_{name}.pth'
+                artifacts.proteins = list(self.pdatas[0].var_names)
+                with open(f'../model_zoo/config_{name}.yaml', 'w') as f:
+                    yaml.dump(vars(self.artifacts), f)
+                
+                print(f'Saved model-config to ../model_zoo/config_{name}.yaml')
             
         return output
     
@@ -826,8 +855,8 @@ class TrainModelPipeline(Pipeline):
     
     def train(self, adata_train, pdata_train, adata_eval, pdata_eval, label='Training'):
         
-        self.gene_featurizer.run(adata_train, log=False)
-        self.gene_featurizer.run(adata_eval, log=False)
+        self.gene_featurizer.run(adata_train)
+        self.gene_featurizer.run(adata_eval)
         self.protein_featurizer.run(pdata_train)
         self.protein_featurizer.run(pdata_eval)
         
@@ -843,8 +872,9 @@ class TrainModelPipeline(Pipeline):
         sp_dists = floatify(pdata_train.obsm['sp_dists'])
         norm = floatify(pdata_train.uns['norm'])
         
-        A = adata_train.obsm['adj_norm'].to_dense().cuda()
-        A2 = adata_eval.obsm['adj_norm'].to_dense().cuda()
+        
+        A = floatify(adata_train.obsm['adj_norm']).cuda()
+        A2 = floatify(adata_eval.obsm['adj_norm']).cuda()
         
         if self.use_histology:
             slicer_train = ImageSlicer(adata_train, size=64, grayscale=True)
@@ -877,7 +907,7 @@ class TrainModelPipeline(Pipeline):
         losses = []
         test_protein = tocpu(d14)
                 
-        with tqdm(total=self.epochs, disable=label!='Training') as pbar:
+        with tqdm(total=self.epochs, disable=False) as pbar:
             pbar.set_postfix_str(f'{d11.shape[1]}d -> {self.latent_dim}d')
             for e in range(self.epochs):
                 
@@ -912,7 +942,8 @@ class TrainModelPipeline(Pipeline):
                 oracle_self = np.mean(column_corr(tocpu(d12), model.impute(d11, A)))
                 self.metrics.update_value('oracle_self', oracle_self, track=True)
                 
-                if e % 100 == 0:
+                if e % 50 == 0:
+                    output.gex_recons = torch.nan_to_num(output.gex_recons)
                     self_recovery = np.mean(column_corr(tocpu(d11), tocpu(output.gex_recons)))
                     self.metrics.update_value('self_recovery', self_recovery, track=True)
                                 
@@ -973,6 +1004,8 @@ class TrainModelPipeline(Pipeline):
         #TODO: Add results for img2proteins
         
         pbar.close()
+        
+        
         
         
         return output, self.artifacts

@@ -353,8 +353,11 @@ class InfoMaxVAE(nn.Module):
         pos_z, _, _ = self.encoders[0](X, edge_index)
         z = self.fc_mus[0](pos_z)
         decoded = self.decoders[1](z)
+        recovered_gex = self.decoders[0](z)
+        
+        
         if return_z:
-            return decoded.cpu().numpy(), z.cpu().numpy()       
+            return decoded.cpu().numpy(), z.cpu().numpy(), recovered_gex.cpu().numpy()       
             
         return decoded.cpu().numpy()
         
