@@ -84,13 +84,6 @@ class InfoMaxVAE(nn.Module):
                 if freeze_encoder:
                     for param in self.image_encoder.encoder.parameters():
                         param.requires_grad = False #freeze
-                
-            # for name, param in self.image_encoder.named_parameters():
-            #     if 'fc' in name:
-            #         param.requires_grad = True
-                    
-            # for param in self.image_encoder.decoder.parameters():
-            #     param.requires_grad = True
             
             self.image_encoder.train()
         
@@ -109,20 +102,6 @@ class InfoMaxVAE(nn.Module):
         ])
         
         dim1, dim2 = input_dim
-        
-        
-        # self.encoders = nn.ModuleList([
-        #     nn.Sequential(
-        #         nn.Linear(dim1, encoder_dim),
-        #         nn.BatchNorm1d(encoder_dim),
-        #         nn.LeakyReLU(),
-        #     ),
-        #     nn.Sequential(
-        #         nn.Linear(dim2, encoder_dim),
-        #         nn.BatchNorm1d(encoder_dim),
-        #         nn.LeakyReLU(),
-        #     ),
-        # ])
         
         
                 
@@ -253,25 +232,6 @@ class InfoMaxVAE(nn.Module):
         return [self.decoders[i](X[i]) for i in range(2)]
 
 
-    # def forward(self, X, A=None):
-    #     output = Namespace()        
-    #     enc_g, enc_p = self.encode(X)
-    #     encoded = [enc_g, enc_p]
-    #     zs, mus, logvars = self.refactor(encoded)
-    #     combined = self.combine(zs)
-    #     X_hat = self.decode(combined)
-
-    #     output.gex_z, output.pex_z = zs
-    #     output.gex_pos_z = enc_g
-    #     output.gex_mu, output.pex_mu = mus
-    #     output.gex_logvar, output.pex_logvar = logvars
-    #     output.gex_c, output.pex_c = combined
-    #     output.gex_recons, output.pex_recons = X_hat
-    #     output.gex_input, output.pex_input = X
-
-    #     return output
-
-    
     def forward(self, X, A, Y=None):
         output = Namespace()
         

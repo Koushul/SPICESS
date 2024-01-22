@@ -10,7 +10,7 @@ from anndata import AnnData
 import networkx as nx
 from scipy.sparse import csr_matrix
 import math
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, pearsonr
 from sklearn.metrics import roc_auc_score, f1_score
 import gudhi
 from muon import prot as pt
@@ -18,6 +18,13 @@ from sklearn.model_selection import cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import roc_auc_score
 import scanpy as sc
+
+
+floatify = lambda x: torch.tensor(x).cuda().float()
+tocpu = lambda x: x.data.cpu().numpy()
+
+column_corr = lambda a, b: [spearmanr(a[:, ixs], b[:, ixs]).statistic for ixs in range(a.shape[1])]
+column_corr_p = lambda a, b: [pearsonr(a[:, ixs], b[:, ixs]).statistic for ixs in range(a.shape[1])]
 
 def euclidean_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
@@ -226,7 +233,53 @@ def adj_f1(adj, adj_predicted) -> float:
 
 
 from sklearn.metrics import precision_score, recall_score
-
+from scipy.spatial import Delaunay
+def alpha_shape(points, alpha, only_outer=True):
+    """
+    Compute the alpha shape (concave hull) of a set of points.
+    :param points: np.array of shape (n,2) points.
+    :param alpha: alpha value.
+    :param only_outer: boolean value to specify if we keep only the outer border
+    or also inner edges.
+    :return: set of (i,j) pairs representing edges of the alpha-shape. (i,j) are
+    the indices in the points array.
+    """
+    assert points.shape[0] > 3, "Need at least four points"
+    def add_edge(edges, i, j):
+        """
+        Add an edge between the i-th and j-th points,
+        if not in the list already
+        """
+        if (i, j) in edges or (j, i) in edges:
+            # already added
+            assert (j, i) in edges, "Can't go twice over same directed edge right?"
+            if only_outer:
+                # if both neighboring triangles are in shape, it's not a boundary edge
+                edges.remove((j, i))
+            return
+        edges.add((i, j))
+    tri = Delaunay(points)
+    edges = set()
+    # Loop over triangles:
+    # ia, ib, ic = indices of corner points of the triangle
+    for ia, ib, ic in tri.simplices:
+        pa = points[ia]
+        pb = points[ib]
+        pc = points[ic]
+        # Computing radius of triangle circumcircle
+        # www.mathalino.com/reviewer/derivation-of-formulas/derivation-of-formula-for-radius-of-circumcircle
+        a = np.sqrt((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2)
+        b = np.sqrt((pb[0] - pc[0]) ** 2 + (pb[1] - pc[1]) ** 2)
+        c = np.sqrt((pc[0] - pa[0]) ** 2 + (pc[1] - pa[1]) ** 2)
+        s = (a + b + c) / 2.0
+        area = np.sqrt(s * (s - a) * (s - b) * (s - c))
+        circum_r = a * b * c / (4.0 * area)
+        if circum_r < alpha:
+            add_edge(edges, ia, ib)
+            add_edge(edges, ib, ic)
+            add_edge(edges, ic, ia)
+    
+    return edges
 def calculate_precision_recall(adj, adj_predicted):
     precision = precision_score(adj.flatten(), adj_predicted.flatten())
     recall = recall_score(adj.flatten(), adj_predicted.flatten())
@@ -345,16 +398,27 @@ def align_adata(target, reference, fill_strategy=0, mock=False):
         fill_value = np.random.randn(1)[0]
     else:
         fill_value = fill_strategy
-    df = target.to_df()
+
+    raw_df = target.to_df().copy()        
+    df = target.to_df().copy()
+    
     df = df[df.columns[df.columns.isin(reference.var_names)]]
     
     counter = 0
+    missing_genes = []
     for c in set(reference.var_names).difference(df.columns):
         df[c] = fill_value
+        raw_df[c] = fill_value
+        
         counter+=1
+        missing_genes.append(c)
         
     # print(f'Filled {counter} genes with {fill_value}')
     rdata = AnnData(X=df, obs=target.obs, uns=target.uns)
     rdata.obsm['spatial'] = target.obsm['spatial']
+    rdata.uns['filled_genes'] = missing_genes
     
+    rdata.layers['counts'] = raw_df[df.columns].values
+
+
     return rdata
