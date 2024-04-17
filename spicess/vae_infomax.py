@@ -5,6 +5,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+import random
+
+"""Set all seeds to ensure reproducibility."""
+np.random.seed(0)
+torch.manual_seed(0)
+random.seed(0)
+torch.cuda.manual_seed_all(0)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+from .modules.clip import ImageEncoder, ProjectionHead
 from .modules.inner_product import InnerProductDecoder
 from .modules.infomax import ContrastiveGraph, ContrastiveProjectionGraph
 from .modules.image_encoder import CNN_VAE
@@ -49,9 +60,10 @@ class InfoMaxVAE(nn.Module):
         hidden3 = 128,
         hidden4 = 128,
         hidden5 = 96,
-        fc1 = 384,
+        fc1 = 512,
         # fc1 = 1536,
-        nc = 1
+        nc = 1,
+        train_idx = None,
     ):
         super().__init__()
 
@@ -59,7 +71,7 @@ class InfoMaxVAE(nn.Module):
         self.encoder_dim = encoder_dim
         self.dropout = dropout
         self.use_hist = use_hist
-        
+        self.train_idx = train_idx        
 
         
         if self.use_hist:
@@ -86,7 +98,7 @@ class InfoMaxVAE(nn.Module):
                         param.requires_grad = False #freeze
             
             self.image_encoder.train()
-        
+            
                 
         self.encoders = nn.ModuleList([
             ContrastiveGraph(
@@ -100,6 +112,7 @@ class InfoMaxVAE(nn.Module):
                 summary=lambda z, *args, **kwargs: torch.sigmoid(z.mean(dim=0)),
                 corruption=corruption),
         ])
+        
         
         dim1, dim2 = input_dim
         
@@ -130,6 +143,12 @@ class InfoMaxVAE(nn.Module):
                 nn.Mish()
             )
         ])
+        
+        self.gene_projector = nn.Sequential(
+            nn.Linear(dim2, latent_dim),
+            nn.BatchNorm1d(latent_dim),
+            nn.Mish()
+        )
         
         self.decoders = nn.ModuleList([
             nn.Sequential(
@@ -187,14 +206,7 @@ class InfoMaxVAE(nn.Module):
         pex_pos_z, pex_neg_z, pex_summary = self.encoders[1](X[1], edge_index)                
         return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
     
-    # def encode(self, X):
-    #     enc_a = self.encoders[0](X[0])
-    #     enc_b = self.encoders[1](X[1])                
-    #     return [enc_a, enc_b]
 
-    
-
-        
     def refactor(self, X):
         index = range(2)
         zs = []
@@ -230,6 +242,12 @@ class InfoMaxVAE(nn.Module):
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(2)]
+    
+    def decode_with_residuals(self, X, X_residuals):
+        decoded_gex = self.decoders[0](X[0])
+        decoded_pex = self.decoders[1](X[1]+X_residuals)
+        
+        return [decoded_gex, decoded_pex]
 
 
     def forward(self, X, A, Y=None):
@@ -253,7 +271,10 @@ class InfoMaxVAE(nn.Module):
             
         combined = self.combine(zs)
         
-        X_hat = self.decode(combined)
+        # X_hat = self.decode(combined)
+        residuals = self.gene_projector(X[0][:, self.train_idx])
+        X_hat = self.decode_with_residuals(combined, residuals)
+        
         
         if self.use_hist:
             image_recons = self.image_encoder.decode(combined[0])
@@ -281,9 +302,9 @@ class InfoMaxVAE(nn.Module):
         if self.use_hist:
             output.img_mu = image_mu
             output.img_logvar = image_logvar
+            output.img_recons = image_recons
             output.img_z = image_z
             output.img_input = Y
-            output.img_recons = image_recons
             output.img_c = combined[2]
             output.use_hist = self.use_hist 
 
@@ -305,14 +326,15 @@ class InfoMaxVAE(nn.Module):
         return z.cpu().numpy()
     
     @torch.no_grad()
-    def impute(self, X, adj, enable_dropout=False, return_z=False):
+    def impute(self, X, adj, indices, enable_dropout=False, return_z=False):
         self.eval()
         if enable_dropout:
             self.enable_dropout()
         edge_index = adj.nonzero().t().contiguous()
         pos_z, _, _ = self.encoders[0](X, edge_index)
         z = self.fc_mus[0](pos_z)
-        decoded = self.decoders[1](z)
+        r = self.gene_projector(X[:, indices])
+        decoded = self.decoders[1](z+r)
         recovered_gex = self.decoders[0](z)
         
         
@@ -323,14 +345,8 @@ class InfoMaxVAE(nn.Module):
         
     @torch.no_grad()
     def img2proteins(self, Y):                
-        # self.eval()
+        self.eval()
         self.image_encoder.eval()
-        
-        # if enable_dropout:
-        #     self.enable_dropout()
-        
-        # background = self.image_encoder.fc_cond(X)
-        # mu, logvar = self.image_encoder.encode(Y, background)
                 
         mu, logvar = self.image_encoder.encode(Y)
         z = self.image_encoder.reparameterize(mu, logvar)

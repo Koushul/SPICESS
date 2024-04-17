@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import numpy as np
+import timm
 
 class CNN_VAE(nn.Module):
 #adapted from https://github.com/uhlerlab/cross-modal-autoencoders
@@ -15,23 +16,30 @@ class CNN_VAE(nn.Module):
         self.cond_dim = cond_dim
         self.dropout = dropout
 
-        self.encoder = nn.Sequential(
-            # nn.MaxPool2d(2, stride=2),
-            nn.Conv2d(nc, hidden1, kernel, stride, padding, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(hidden1, hidden2, kernel, stride, padding, bias=False),
-            # nn.BatchNorm2d(hidden2),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(hidden2, hidden3, kernel, stride, padding, bias=False),
-            # nn.BatchNorm2d(hidden3),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(hidden3, hidden4, kernel, stride, padding, bias=False),
-            # nn.BatchNorm2d(hidden4),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(hidden4, hidden5, kernel, stride, padding, bias=False),
-            # nn.BatchNorm2d(hidden5),
-            nn.LeakyReLU(0.2, inplace=True),
+        # self.encoder = nn.Sequential(
+        #     # nn.MaxPool2d(2, stride=2),
+        #     nn.Conv2d(nc, hidden1, kernel, stride, padding, bias=False),
+        #     nn.LeakyReLU(0.2, inplace=True),
+        #     nn.Conv2d(hidden1, hidden2, kernel, stride, padding, bias=False),
+        #     # nn.BatchNorm2d(hidden2),
+        #     nn.LeakyReLU(0.2, inplace=True),
+        #     nn.Conv2d(hidden2, hidden3, kernel, stride, padding, bias=False),
+        #     # nn.BatchNorm2d(hidden3),
+        #     nn.LeakyReLU(0.2, inplace=True),
+        #     nn.Conv2d(hidden3, hidden4, kernel, stride, padding, bias=False),
+        #     # nn.BatchNorm2d(hidden4),
+        #     nn.LeakyReLU(0.2, inplace=True),
+        #     nn.Conv2d(hidden4, hidden5, kernel, stride, padding, bias=False),
+        #     # nn.BatchNorm2d(hidden5),
+        #     nn.LeakyReLU(0.2, inplace=True),
+        # )
+
+        self.encoder = timm.create_model(
+            'resnet34', True, num_classes=0, global_pool="avg"
         )
+        
+        for p in self.encoder.parameters():
+            p.requires_grad = True
 
         self.fc_mus = nn.Sequential(
             nn.Linear(fc1, fc2),
@@ -72,7 +80,7 @@ class CNN_VAE(nn.Module):
         h = self.encoder(x)
         if torch.isnan(torch.sum(h)):
             print('convolution exploded')
-        h = h.view(-1, h.size()[1]*h.size()[2]*h.size()[3])
+        # h = h.view(-1, h.size()[1]*h.size()[2]*h.size()[3])
 
         
         return self.fc_mus(h), self.fc_vars(h)

@@ -2,7 +2,14 @@ from argparse import Namespace
 import torch
 import torch.nn.functional as F
 import numpy as np
-# from math import prod
+import random
+"""Set all seeds to ensure reproducibility."""
+np.random.seed(0)
+torch.manual_seed(0)
+random.seed(0)
+torch.cuda.manual_seed_all(0)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EPS = 1e-15
@@ -11,6 +18,14 @@ def disable(func):
     def wrapper(*args, **kwargs):
         return torch.tensor(0.).to(device)
     return wrapper
+
+def cross_entropy(preds, targets, reduction='none'):
+    log_softmax = torch.nn.LogSoftmax(dim=-1)
+    loss = (-targets * log_softmax(preds)).sum(1)
+    if reduction == "none":
+        return loss
+    elif reduction == "mean":
+        return loss.mean()
 
 def discriminate(z, summary, model_weight, sigmoid=True):            
     summary = summary.t() if summary.dim() > 1 else summary
@@ -169,7 +184,6 @@ class LossFunctions:
         return pos_loss + neg_loss
 
 
-
 class Loss:
     
     _base_alpha = 0.1
@@ -194,7 +208,8 @@ class Loss:
             'recons_img': self._base_alpha,
             'kl_img': self._base_alpha,  
             'cosine_img': self._base_alpha, 
-            'align': self._base_alpha        
+            'align': self._base_alpha,
+            'clip': self._base_alpha       
         }
 
 
@@ -244,9 +259,10 @@ class Loss:
         else:
             buffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(
                 varz.gex_z, varz.pex_z, varz.img_z, varz.gex_sp_dist)
-            buffer.kl_loss_img = a['kl_img'] * LossFunctions.kl_sum(varz.img_mu, varz.img_logvar)
             
-            buffer.recons_loss_img = a['recons_img'] * LossFunctions.bce_flat(varz.img_recons, varz.img_input, reduction='mean')
+            # buffer.kl_loss_img = a['kl_img'] * LossFunctions.kl_sum(varz.img_mu, varz.img_logvar)
+            # buffer.recons_loss_img = a['recons_img'] * LossFunctions.bce_flat(varz.img_recons, varz.img_input, reduction='mean')
+            
             buffer.cosine_loss_img = a['cosine_img'] * LossFunctions.cosine_loss(varz.img_z, varz.img_c)
             
             buffer.alignment_loss = a['align'] * (
