@@ -10,7 +10,7 @@ from anndata import AnnData
 import networkx as nx
 from scipy.sparse import csr_matrix
 import math
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, pearsonr
 from sklearn.metrics import roc_auc_score, f1_score
 import gudhi
 from muon import prot as pt
@@ -18,6 +18,13 @@ from sklearn.model_selection import cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import roc_auc_score
 import scanpy as sc
+
+
+floatify = lambda x: torch.tensor(x).cuda().float()
+tocpu = lambda x: x.data.cpu().numpy()
+
+column_corr = lambda a, b: [spearmanr(a[:, ixs], b[:, ixs]).statistic for ixs in range(a.shape[1])]
+column_corr_p = lambda a, b: [pearsonr(a[:, ixs], b[:, ixs]).statistic for ixs in range(a.shape[1])]
 
 def euclidean_distance(p1, p2):
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
@@ -226,7 +233,53 @@ def adj_f1(adj, adj_predicted) -> float:
 
 
 from sklearn.metrics import precision_score, recall_score
-
+from scipy.spatial import Delaunay
+def alpha_shape(points, alpha, only_outer=True):
+    """
+    Compute the alpha shape (concave hull) of a set of points.
+    :param points: np.array of shape (n,2) points.
+    :param alpha: alpha value.
+    :param only_outer: boolean value to specify if we keep only the outer border
+    or also inner edges.
+    :return: set of (i,j) pairs representing edges of the alpha-shape. (i,j) are
+    the indices in the points array.
+    """
+    assert points.shape[0] > 3, "Need at least four points"
+    def add_edge(edges, i, j):
+        """
+        Add an edge between the i-th and j-th points,
+        if not in the list already
+        """
+        if (i, j) in edges or (j, i) in edges:
+            # already added
+            assert (j, i) in edges, "Can't go twice over same directed edge right?"
+            if only_outer:
+                # if both neighboring triangles are in shape, it's not a boundary edge
+                edges.remove((j, i))
+            return
+        edges.add((i, j))
+    tri = Delaunay(points)
+    edges = set()
+    # Loop over triangles:
+    # ia, ib, ic = indices of corner points of the triangle
+    for ia, ib, ic in tri.simplices:
+        pa = points[ia]
+        pb = points[ib]
+        pc = points[ic]
+        # Computing radius of triangle circumcircle
+        # www.mathalino.com/reviewer/derivation-of-formulas/derivation-of-formula-for-radius-of-circumcircle
+        a = np.sqrt((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2)
+        b = np.sqrt((pb[0] - pc[0]) ** 2 + (pb[1] - pc[1]) ** 2)
+        c = np.sqrt((pc[0] - pa[0]) ** 2 + (pc[1] - pa[1]) ** 2)
+        s = (a + b + c) / 2.0
+        area = np.sqrt(s * (s - a) * (s - b) * (s - c))
+        circum_r = a * b * c / (4.0 * area)
+        if circum_r < alpha:
+            add_edge(edges, ia, ib)
+            add_edge(edges, ib, ic)
+            add_edge(edges, ic, ia)
+    
+    return edges
 def calculate_precision_recall(adj, adj_predicted):
     precision = precision_score(adj.flatten(), adj_predicted.flatten())
     recall = recall_score(adj.flatten(), adj_predicted.flatten())
@@ -273,6 +326,39 @@ def select_points_for_concentric_circles(points, center, inner_radius, outer_rad
             selected_points.append(point)
     return selected_points
 
+class ImageSlicer:
+    
+    def __init__(self, adata, grayscale=True, size=None):
+        self.adata = adata
+        _spatial = adata.uns['spatial']
+        self.key = list(_spatial.keys())[0]
+        self.scale_factor = _spatial[self.key ]['scalefactors']['tissue_hires_scalef']
+        self.spot_size = _spatial[self.key ]['scalefactors']['spot_diameter_fullres'] * 0.5
+        self.xy = adata.obsm['spatial'] * self.scale_factor
+        self.d = size or int(self.spot_size)
+        self.img = _spatial[self.key]['images']['hires']
+        self.grayscale = grayscale
+        
+    def __len__(self):
+        return len(self.xy)
+        
+    def crop_at(self, x, y, size=None):
+        if size:
+            d = size
+        else:
+            d = self.d
+            
+        image = self.img[y-d:y+d, x-d:x+d]
+        
+        if not self.grayscale:
+            return image
+        
+        return np.dot(image[...,:3], [0.299, 0.587, 0.114])    
+    
+    def __call__(self, ix, size=None):
+        x, y = self.xy[ix].astype(int)
+        return self.crop_at(x, y, size=size)
+    
 
 def clean_adata(adata):
     for v in ['mt', 'n_cells_by_counts', 'mean_counts', 'log1p_mean_counts', 'pct_dropout_by_counts', 'total_counts', 'log1p_total_counts', 
@@ -297,3 +383,94 @@ def clean_adata(adata):
         'total_counts_mt', 'log1p_total_counts_mt', 'pct_counts_mt']:
         if o in adata.obs.columns:
             del adata.obs[o]
+            
+            
+def cluster(a, res, layer=None):
+    sc.pp.neighbors(a, use_rep=layer)
+    sc.tl.leiden(a, resolution=res)
+    if 'leiden_colors' in a.uns:
+        a.uns.pop('leiden_colors')
+        
+def align_adata(target, reference, fill_strategy=0, mock=False):
+    if mock:
+        return target
+    if fill_strategy == 'random':
+        fill_value = np.random.randn(1)[0]
+    else:
+        fill_value = fill_strategy
+
+    raw_df = target.to_df().copy()        
+    df = target.to_df().copy()
+    
+    df = df[df.columns[df.columns.isin(reference.var_names)]]
+    
+    counter = 0
+    missing_genes = []
+    for c in set(reference.var_names).difference(df.columns):
+        df[c] = fill_value
+        raw_df[c] = fill_value
+        
+        counter+=1
+        missing_genes.append(c)
+        
+    # print(f'Filled {counter} genes with {fill_value}')
+    rdata = AnnData(X=df, obs=target.obs, uns=target.uns)
+    if 'spatial' in target.obsm:
+        rdata.obsm['spatial'] = target.obsm['spatial']
+    
+    rdata.uns['filled_genes'] = missing_genes
+    
+    rdata.layers['counts'] = raw_df[df.columns].values
+
+
+    return rdata
+
+
+from scipy.spatial import Delaunay
+
+def alpha_shape(points, alpha, only_outer=True):
+    """
+    Compute the alpha shape (concave hull) of a set of points.
+    :param points: np.array of shape (n,2) points.
+    :param alpha: alpha value.
+    :param only_outer: boolean value to specify if we keep only the outer border
+    or also inner edges.
+    :return: set of (i,j) pairs representing edges of the alpha-shape. (i,j) are
+    the indices in the points array.
+    """
+    assert points.shape[0] > 3, "Need at least four points"
+    def add_edge(edges, i, j):
+        """
+        Add an edge between the i-th and j-th points,
+        if not in the list already
+        """
+        if (i, j) in edges or (j, i) in edges:
+            # already added
+            assert (j, i) in edges, "Can't go twice over same directed edge right?"
+            if only_outer:
+                # if both neighboring triangles are in shape, it's not a boundary edge
+                edges.remove((j, i))
+            return
+        edges.add((i, j))
+    tri = Delaunay(points)
+    edges = set()
+    # Loop over triangles:
+    # ia, ib, ic = indices of corner points of the triangle
+    for ia, ib, ic in tri.simplices:
+        pa = points[ia]
+        pb = points[ib]
+        pc = points[ic]
+        # Computing radius of triangle circumcircle
+        # www.mathalino.com/reviewer/derivation-of-formulas/derivation-of-formula-for-radius-of-circumcircle
+        a = np.sqrt((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2)
+        b = np.sqrt((pb[0] - pc[0]) ** 2 + (pb[1] - pc[1]) ** 2)
+        c = np.sqrt((pc[0] - pa[0]) ** 2 + (pc[1] - pa[1]) ** 2)
+        s = (a + b + c) / 2.0
+        area = np.sqrt(s * (s - a) * (s - b) * (s - c))
+        circum_r = a * b * c / (4.0 * area)
+        if circum_r < alpha:
+            add_edge(edges, ia, ib)
+            add_edge(edges, ib, ic)
+            add_edge(edges, ic, ia)
+    
+    return edges

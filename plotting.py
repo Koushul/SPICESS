@@ -97,7 +97,8 @@ def plot_umap_grid(
 
     for ix, ax in enumerate(axs):
             
-        sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
+        sns.scatterplot(x=emb[:, 0], y=emb[:, 1], 
+            hue=imputed_proteins[:, ix], edgecolor='black', s=size, ax=ax, palette=cmap)
         
         try:
             _, name, desc = antibody_panel[antibody_panel.name==protein_names[ix].replace('-A', '')].values[0]
@@ -127,6 +128,7 @@ def plot_latent(
     labels,
     names=['Gene\nEmbeddings', 'Protein\nEmbeddings'],
     legend=False,
+    edgecolor='black',
     remove_outliers=False,
     n_components=2,
     separate_dim=False,
@@ -143,6 +145,7 @@ def plot_latent(
     min_dist=0.1,
     spread=1.0,
     local_connectivity=1.0,
+    linewidth = 1.0,
     repulsion_strength=1.0,
 ):
     method_names = {'pca': 'PC', 'umap': 'UMAP'}
@@ -153,7 +156,7 @@ def plot_latent(
         colors = ref_colors
     
     plt.rcParams['figure.figsize'] = (16, 8)
-
+    
     for i, (dat, lab) in enumerate(zip(data, labels)):
         ax = plt.gcf().add_subplot(1, len(data), i+1, projection=None)
         axs.append(ax)
@@ -161,12 +164,12 @@ def plot_latent(
             red = cuml.UMAP(
                 n_components=n_components,
                 n_neighbors=min(200, dat.shape[0] - 1) if n_neighbors is None else n_neighbors,
-                learning_rate=1.0,
-                min_dist=0.1,
-                spread=1.0,
-                local_connectivity=1.0,
-                repulsion_strength=1.0,
-                random_state=42)
+                learning_rate=learning_rate,
+                min_dist=min_dist,
+                spread=spread, 
+                local_connectivity=local_connectivity,
+                repulsion_strength=repulsion_strength,
+                random_state=seed)
             if separate_dim:
                 red.fit(dat)
             else:
@@ -178,7 +181,7 @@ def plot_latent(
         for ix, l in enumerate(unique_labels):
             data_subset = np.transpose(plot_data[lab == l])
 
-            scatter = ax.scatter(*data_subset, label=l, edgecolor='black', color=colors[ix], s=size)
+            scatter = ax.scatter(*data_subset, label=l, edgecolor=edgecolor, color=colors[ix], s=size, linewidth=linewidth)
         fig = plt.gcf()
         # if i == 1 and legend:
         #     fig.legend(scatter, labels=unique_labels, bbox_to_anchor=(0.5, -0.05), loc='lower center', ncols=7)
@@ -193,6 +196,8 @@ def plot_latent(
         ax.spines['top'].set_visible(False)
         ax.spines['left'].set_visible(False)
         ax.spines['bottom'].set_visible(False)
+        
+        ax.set_facecolor('black')
         
     if not separate_dim:
         axs_xlim = np.array([ax.get_xlim() for ax in axs])

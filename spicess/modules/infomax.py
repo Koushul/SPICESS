@@ -53,11 +53,10 @@ class Encoder(torch.nn.Module):
         return x
 
 
-class GRACE(torch.nn.Module):
-    ## Adapted from https://github.com/CRIPAC-DIG/GRACE/tree/master
+class ContrastiveProjectionGraph(torch.nn.Module):
     
     def __init__(self, in_channels, out_channels, num_hidden, latent_dim, tau=0.5, activation=F.elu, k=2):
-        super(GRACE, self).__init__()
+        super(ContrastiveProjectionGraph, self).__init__()
         self.encoder: Encoder = Encoder(in_channels, out_channels, activation, k)
         self.tau: float = tau
         self.latent_dim: int = latent_dim
@@ -142,7 +141,6 @@ def drop_feature(x, drop_prob):
 
 
 class ContrastiveGraph(torch.nn.Module):
-    ## Adapted from https://arxiv.org/abs/1809.10341
 
     def __init__(self, hidden_channels, encoder, summary, corruption):
         super().__init__()
@@ -150,21 +148,17 @@ class ContrastiveGraph(torch.nn.Module):
         self.encoder = encoder
         self.summary = summary
         self.corruption = corruption
-
         self.weight = Parameter(torch.empty(hidden_channels, hidden_channels))
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        r"""Resets all learnable parameters of the module."""
         reset(self.encoder)
         reset(self.summary)
         uniform(self.hidden_channels, self.weight)
 
 
     def forward(self, *args, **kwargs) -> Tuple[Tensor, Tensor, Tensor]:
-        """Returns the latent space for the input arguments, their
-        corruptions and their summary representation."""
         pos_z = self.encoder(*args, **kwargs)
 
         cor = self.corruption(*args, **kwargs)
@@ -173,32 +167,18 @@ class ContrastiveGraph(torch.nn.Module):
         cor_kwargs = copy.copy(kwargs)
         for key, value in zip(kwargs.keys(), cor[len(args):]):
             cor_kwargs[key] = value
-
         neg_z = self.encoder(*cor_args, **cor_kwargs)
-
         summary = self.summary(pos_z, *args, **kwargs)
-
         return pos_z, neg_z, summary
 
 
     def discriminate(self, z: Tensor, summary: Tensor, sigmoid: bool = True) -> Tensor:
-        r"""Given the patch-summary pair :obj:`z` and :obj:`summary`, computes
-        the probability scores assigned to this patch-summary pair.
-
-        Args:
-            z (torch.Tensor): The latent space.
-            summary (torch.Tensor): The summary vector.
-            sigmoid (bool, optional): If set to :obj:`False`, does not apply
-                the logistic sigmoid function to the output.
-                (default: :obj:`True`)
-        """
         summary = summary.t() if summary.dim() > 1 else summary
         value = torch.matmul(z, torch.matmul(self.weight, summary))
         return torch.sigmoid(value) if sigmoid else value
 
 
     def loss(self, pos_z: Tensor, neg_z: Tensor, summary: Tensor) -> Tensor:
-        r"""Computes the mutual information maximization objective."""
         pos_loss = -torch.log(
             self.discriminate(pos_z, summary, sigmoid=True) + EPS).mean()
         neg_loss = -torch.log(1 - self.discriminate(neg_z, summary, sigmoid=True) + EPS).mean()

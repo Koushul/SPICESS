@@ -5,11 +5,11 @@ PCNA,PCNA,Cell proliferation marker,Cell proliferation marker
 KRT5,PanCK,Structural marker,Structural marker
 CD68,CD68,Macrophages,Macrophages
 CEACAM8,CD66b,Neutrophils,Neutrophils
-PTPRC,CD45RA,Functional T cells,Functional T cells-RA
+PTPRC_1,CD45RA,Functional T cells,Functional T cells-RA
 HLA-DRA,HLA-DR,Myeloid cells,Myeloid cells
 PAX5,PAX5,B cells,PAX5 B cells
 SDC1,CD138,Plasma cells,Plasma cells
-PTPRC,CD45RO,Functional T cells,Functional T cells-RO
+PTPRC_2,CD45RO,Functional T cells,Functional T cells-RO
 CD8A,CD8A,T cells,CD8A T cells
 BCL2,BCL2,Apoptotic marker,Apoptotic marker
 CD19,CD19,B cells,CD19 B cells

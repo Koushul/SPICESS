@@ -2,7 +2,14 @@ from argparse import Namespace
 import torch
 import torch.nn.functional as F
 import numpy as np
-# from math import prod
+import random
+"""Set all seeds to ensure reproducibility."""
+np.random.seed(0)
+torch.manual_seed(0)
+random.seed(0)
+torch.cuda.manual_seed_all(0)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EPS = 1e-15
@@ -11,6 +18,19 @@ def disable(func):
     def wrapper(*args, **kwargs):
         return torch.tensor(0.).to(device)
     return wrapper
+
+def cross_entropy(preds, targets, reduction='none'):
+    log_softmax = torch.nn.LogSoftmax(dim=-1)
+    loss = (-targets * log_softmax(preds)).sum(1)
+    if reduction == "none":
+        return loss
+    elif reduction == "mean":
+        return loss.mean()
+
+def discriminate(z, summary, model_weight, sigmoid=True):            
+    summary = summary.t() if summary.dim() > 1 else summary
+    value = torch.matmul(z, torch.matmul(model_weight, summary))
+    return torch.sigmoid(value) if sigmoid else value
 
 def compute_distance(a, b, dist_method='euclidean'):
     if dist_method == 'cosine':
@@ -31,28 +51,38 @@ def compute_distance(a, b, dist_method='euclidean'):
         return sim, dist
 
 _f = lambda x: float(x)
-
     
 class LossFunctions:
 
     @staticmethod
-    def binary_cross_entropy(preds, labels, pos_weight, norm):
+    def bce_with_logits(preds, labels, pos_weight, norm):
         cost = norm * F.binary_cross_entropy_with_logits(
             preds, 
             labels, 
             pos_weight=pos_weight,
             reduction='mean')
-        return cost    
+        return cost 
     
     @staticmethod
-    def spatial_loss(z1, z2, sp_dists):
+    def bce_flat(reconstructed, data, reduction='sum'):
+        reconstructed = reconstructed.clip(min=0, max=1)
+        data = data.clip(min=0, max=1)
+        
+        return F.binary_cross_entropy(reconstructed.view(-1), data.view(-1), reduction=reduction)
+    
+    @staticmethod
+    def spatial_loss(z1, z2, z3=None, sp_dists=None):
         """
         Pushes the closeness between embeddings to 
         not only reflect the expression similarity 
         but also their spatial proximity
         """
         sp_loss = 0
-        for z in [z1, z2]:
+        
+        iterate_over = [z1, z2]
+        if z3 is not None:
+            iterate_over.append(z3)
+        for z in iterate_over:
             z_dists = torch.cdist(z, z, p=2)
             z_dists = torch.div(z_dists, torch.max(z_dists))
             n_items = z.size(dim=0) * z.size(dim=0)
@@ -87,6 +117,11 @@ class LossFunctions:
         reconstruction_loss = (reconstructed - data).square().mean(axis=1).mean(axis=0)
         return reconstruction_loss
     
+    def mean_sq_error_(reconstructed, data):
+        """Controls the ability of the latent space to encode information."""
+        reconstruction_loss = (reconstructed - data).square().mean(axis=1).mean(axis=0)
+        return reconstruction_loss
+        
     # @staticmethod
     # def cross_loss(comb1, comb2, W):
     #     _, comdiff1 = compute_distance(comb1, comb2)
@@ -95,7 +130,7 @@ class LossFunctions:
     #     return cross_loss
 
     @staticmethod
-    def kl(epoch, epochs, mu, logvar):
+    def kl(epoch, epochs, mu, logvar, anneal=False):
         """
         Controls the smoothness of the latent space.
         The KL divergence measures the amount of information lost 
@@ -111,9 +146,21 @@ class LossFunctions:
         
         c = epochs / 2  # Midpoint
         kl_anneal = 1 / ( 1 + np.exp( - 5 * (epoch - c) / c ) )
-        kl_loss = 1e-3 * kl_anneal * kl_loss
+        
+        if anneal:
+            kl_loss = 1e-3 * kl_anneal * kl_loss
+        else:
+            kl_loss = 1e-3 * kl_loss
+            
         
         return kl_loss
+    
+    @staticmethod
+    def kl_sum(mu, logvar, ):
+        f=torch.sum
+        s=1
+        kl= -(0.5 / s) * f(torch.sum(1 + 2 * logvar - mu.pow(2) - logvar.exp().pow(2), 1))
+        return kl
     
     @staticmethod
     def f_recons(comb1, comb2):
@@ -132,22 +179,21 @@ class LossFunctions:
     
     @staticmethod
     def mutual_info_loss(pos_z, neg_z, summary, model_weight):
-        def discriminate(z, summary, sigmoid=True):            
-            summary = summary.t() if summary.dim() > 1 else summary
-            value = torch.matmul(z, torch.matmul(model_weight, summary))
-            return torch.sigmoid(value) if sigmoid else value        
-        pos_loss = -torch.log(discriminate(pos_z, summary, sigmoid=True) + EPS).mean()
-        neg_loss = -torch.log(1 - discriminate(neg_z, summary, sigmoid=True) + EPS).mean()
+        pos_loss = -torch.log(discriminate(pos_z, summary, model_weight, sigmoid=True) + EPS).mean()
+        neg_loss = -torch.log(1 - discriminate(neg_z, summary, model_weight, sigmoid=True) + EPS).mean()
         return pos_loss + neg_loss
-
 
 
 class Loss:
     
     _base_alpha = 0.1
     
-    def __init__(self, max_epochs):
-        self.max_epochs = max_epochs        
+    def __init__(self, max_epochs, use_hist, use_annealing=False):
+        self.max_epochs = max_epochs  
+        self.mse = torch.nn.MSELoss()
+        self.use_hist = use_hist
+        self.use_annealing = use_annealing
+        
         self.alpha = {
             'kl_gex': self._base_alpha,
             'kl_pex': self._base_alpha,
@@ -159,7 +205,11 @@ class Loss:
             'spatial': self._base_alpha,
             'mutual_gex': self._base_alpha,
             'mutual_pex': self._base_alpha,
-            
+            'recons_img': self._base_alpha,
+            'kl_img': self._base_alpha,  
+            'cosine_img': self._base_alpha, 
+            'align': self._base_alpha,
+            'clip': self._base_alpha       
         }
 
 
@@ -169,17 +219,59 @@ class Loss:
     def compute(self, epoch, varz) -> Namespace:
         buffer = Namespace()
         a = self.alpha
-        buffer.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
-        buffer.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
-        buffer.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(varz.gex_recons, varz.gex_input)
-        buffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(varz.pex_recons, varz.pex_input)
-        buffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(varz.gex_z, varz.gex_c)
-        buffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(varz.pex_z, varz.pex_c)
-        buffer.adj_loss = a['adj'] * LossFunctions.binary_cross_entropy(varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
-        buffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(varz.gex_z, varz.pex_z, varz.gex_sp_dist)
-        buffer.mutual_info_loss = a['mutual_gex'] * LossFunctions.mutual_info_loss(varz.gex_pos_z, varz.gex_neg_z, varz.gex_summary, varz.gex_model_weight)
-        buffer.mutual_info_loss = a['mutual_pex'] * LossFunctions.mutual_info_loss(varz.pex_pos_z, varz.pex_neg_z, varz.pex_summary, varz.pex_model_weight)
+        c = self.max_epochs / 2  # Midpoint
         
+        if self.use_annealing:
+            anneal = 1 / ( 1 + np.exp( - 5 * (epoch - c) / c ) )
+        else:
+            anneal = 1
+        
+        buffer.kl_loss_gex = a['kl_gex'] * LossFunctions.kl(
+            epoch, self.max_epochs, varz.gex_mu, varz.gex_logvar)
+        buffer.kl_loss_pex = a['kl_pex'] * LossFunctions.kl(
+            epoch, self.max_epochs, varz.pex_mu, varz.pex_logvar)
+        # buffer.recons_loss_gex = a['recons_gex'] * LossFunctions.mean_sq_error(
+        #     varz.gex_recons, varz.gex_input)
+        # buffer.recons_loss_pex = a['recons_pex'] * LossFunctions.mean_sq_error(
+        #     varz.pex_recons, varz.pex_input)
+        
+        buffer.recons_loss_gex = a['recons_gex'] * LossFunctions.bce_flat(
+            varz.gex_recons, varz.gex_input)
+        buffer.recons_loss_pex = a['recons_pex'] * LossFunctions.bce_flat(
+            varz.pex_recons, varz.pex_input)
+        
+        buffer.cosine_loss_gex = a['cosine_gex'] * LossFunctions.cosine_loss(
+            varz.gex_z, varz.gex_c)
+        buffer.cosine_loss_pex = a['cosine_pex'] * LossFunctions.cosine_loss(
+            varz.pex_z, varz.pex_c)
+        buffer.adj_loss = a['adj'] * LossFunctions.bce_with_logits(
+            varz.adj_recon, varz.adj_label, varz.pos_weight, varz.norm)
+        buffer.mutual_info_loss = a['mutual_gex'] * LossFunctions.mutual_info_loss(
+            varz.gex_pos_z, varz.gex_neg_z, varz.gex_summary, varz.gex_model_weight)
+        buffer.mutual_info_loss = a['mutual_pex'] * LossFunctions.mutual_info_loss(
+            varz.pex_pos_z, varz.pex_neg_z, varz.pex_summary, varz.pex_model_weight)
+        
+        if not self.use_hist:
+            buffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(
+                varz.gex_z, varz.pex_z, z3=None, sp_dists=varz.gex_sp_dist)
+            buffer.alignment_loss = a['align'] * self.mse(varz.gex_z, varz.pex_z) * anneal
+            
+        else:
+            buffer.spatial_loss = a['spatial'] * LossFunctions.spatial_loss(
+                varz.gex_z, varz.pex_z, varz.img_z, varz.gex_sp_dist)
+            
+            # buffer.kl_loss_img = a['kl_img'] * LossFunctions.kl_sum(varz.img_mu, varz.img_logvar)
+            # buffer.recons_loss_img = a['recons_img'] * LossFunctions.bce_flat(varz.img_recons, varz.img_input, reduction='mean')
+            
+            buffer.cosine_loss_img = a['cosine_img'] * LossFunctions.cosine_loss(varz.img_z, varz.img_c)
+            
+            buffer.alignment_loss = a['align'] * (
+                self.mse(varz.gex_z, varz.pex_z) + \
+                self.mse(varz.gex_z, varz.img_z) + \
+                self.mse(varz.img_z, varz.pex_z)
+            )
+            
+            
         return buffer
 
 class NonSpatialLoss(Loss):

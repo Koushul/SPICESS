@@ -5,10 +5,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+import random
 
-from .modules.graph import GraphConvolution
+"""Set all seeds to ensure reproducibility."""
+np.random.seed(0)
+torch.manual_seed(0)
+random.seed(0)
+torch.cuda.manual_seed_all(0)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+from .modules.clip import ImageEncoder, ProjectionHead
 from .modules.inner_product import InnerProductDecoder
-from .modules.infomax import ContrastiveGraph
+from .modules.infomax import ContrastiveGraph, ContrastiveProjectionGraph
+from .modules.image_encoder import CNN_VAE
+
+
+
+pool = nn.MaxPool2d(2, stride=2)
 
 class GraphEncoder(nn.Module):
     def __init__(self, in_channels, hidden_channels):
@@ -32,15 +46,59 @@ class InfoMaxVAE(nn.Module):
     def __init__(
         self,
         input_dim,
-        dropout=0,
-        latent_dim=32,
-        encoder_dim=128,
+        dropout = 0,
+        latent_dim = 32,
+        encoder_dim = 128,
+        use_hist = False,
+        pretrained = None,
+        freeze_encoder = True,
+        kernel = 4, 
+        stride = 2, 
+        padding = 1, 
+        hidden1 = 64, 
+        hidden2 = 128, 
+        hidden3 = 128,
+        hidden4 = 128,
+        hidden5 = 96,
+        fc1 = 512,
+        # fc1 = 1536,
+        nc = 1,
+        train_idx = None,
     ):
         super().__init__()
 
         self.latent_dim = latent_dim
         self.encoder_dim = encoder_dim
         self.dropout = dropout
+        self.use_hist = use_hist
+        self.train_idx = train_idx        
+
+        
+        if self.use_hist:
+            
+            self.image_encoder = CNN_VAE(
+                kernel, 
+                stride, 
+                padding, 
+                nc, 
+                hidden1, 
+                hidden2, 
+                hidden3, 
+                hidden4, 
+                hidden5, 
+                fc1,
+                latent_dim,
+            )
+            
+            if pretrained:
+                self.image_encoder.load_state_dict(torch.load(pretrained))
+            
+                if freeze_encoder:
+                    for param in self.image_encoder.encoder.parameters():
+                        param.requires_grad = False #freeze
+            
+            self.image_encoder.train()
+            
                 
         self.encoders = nn.ModuleList([
             ContrastiveGraph(
@@ -58,37 +116,18 @@ class InfoMaxVAE(nn.Module):
         
         dim1, dim2 = input_dim
         
-        # self.encoders = nn.ModuleList([
-        #     nn.Sequential(
-        #         nn.Linear(dim1, encoder_dim*2),
-        #         nn.BatchNorm1d(encoder_dim*2),
-        #         nn.LeakyReLU(),
-        #         nn.Dropout(dropout),
-        #         nn.Linear(encoder_dim*2, encoder_dim),
-        #         nn.BatchNorm1d(encoder_dim),
-        #         nn.LeakyReLU(),
-        #     ),
-        #     nn.Sequential(
-        #         nn.Linear(dim2, encoder_dim*2),
-        #         nn.BatchNorm1d(encoder_dim*2),
-        #         nn.LeakyReLU(),
-        #         nn.Dropout(dropout),
-        #         nn.Linear(encoder_dim*2, encoder_dim),
-        #         nn.BatchNorm1d(encoder_dim),
-        #         nn.LeakyReLU(),
-        #     ),
-        # ])
         
+                
         self.fc_mus = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             ),
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             )
         ])
     
@@ -96,43 +135,70 @@ class InfoMaxVAE(nn.Module):
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             ),
             nn.Sequential(
                 nn.Linear(encoder_dim, latent_dim),
                 nn.BatchNorm1d(latent_dim),
-                nn.LeakyReLU(),
+                nn.Mish()
             )
         ])
+        
+        self.gene_projector = nn.Sequential(
+            nn.Linear(dim2, latent_dim),
+            nn.BatchNorm1d(latent_dim),
+            nn.Mish()
+        )
         
         self.decoders = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(latent_dim, dim1),
                 nn.BatchNorm1d(dim1),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(dim1, 2*dim1),
                 nn.BatchNorm1d(2*dim1),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(2*dim1, dim1),
+                nn.Sigmoid()
             ), 
             nn.Sequential(
                 nn.Linear(latent_dim, dim2),
                 nn.BatchNorm1d(dim2),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(dim2, 2*dim2),
                 nn.BatchNorm1d(2*dim2),
-                nn.LeakyReLU(),
-                nn.Dropout(dropout),
+                nn.Mish(),
+                # nn.Dropout(dropout),
                 nn.Linear(2*dim2, dim2),
+                nn.Sigmoid()
             ), 
         ])
         
         self.adjacency = InnerProductDecoder(
             dropout=dropout, 
             act=lambda x: x)
+        
+    def freeze_all(self):
+        for param in self.parameters():
+            param.requires_grad = False
+    
+    def unfreeze_all(self):
+        for param in self.parameters():
+            param.requires_grad = True
+            
+    def unfreeze_gene_vae(self):
+        
+        params = []
+        params.extend(self.encoders[0].parameters())
+        params.extend(self.fc_mus[0].parameters())
+        params.extend(self.fc_vars[0].parameters())
+        params.extend(self.decoders[0].parameters())
+        
+        for param in params:
+            param.requires_grad = True            
 
     def encode(self, X, A):
         edge_index = A.nonzero().t().contiguous()
@@ -140,13 +206,8 @@ class InfoMaxVAE(nn.Module):
         pex_pos_z, pex_neg_z, pex_summary = self.encoders[1](X[1], edge_index)                
         return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
     
-    # def encode(self, X, A):
-    #     gex_neg_z = gex_pos_z = self.encoders[0](X[0])
-    #     pex_neg_z = pex_pos_z = self.encoders[1](X[1])                
-    #     gex_summary = pex_summary = None
-    #     return [gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary]
-        
-    def refactor(self, X, A):
+
+    def refactor(self, X):
         index = range(2)
         zs = []
         mus = []
@@ -165,29 +226,63 @@ class InfoMaxVAE(nn.Module):
             logvars.append(logvar)
         return zs, mus, logvars
 
-    def combine(self, Z):
+    def combine(self, Zs):
         """This moves correspondent latent embeddings 
         in similar directions over the course of training 
         and is key in the formation of similar latent spaces."""         
-        mZ = 0.5*(Z[0] + Z[1])        
+        
+        if self.use_hist:
+            mZ = (1/3) * (Zs[0] + Zs[1] + Zs[2])
+            return [mZ, mZ, mZ]
+        
+        mZ = 0.5*(Zs[0] + Zs[1])        
         return [mZ, mZ]
+        
+
 
     def decode(self, X):
         return [self.decoders[i](X[i]) for i in range(2)]
     
-    def forward(self, X, A):
+    def decode_with_residuals(self, X, X_residuals):
+        decoded_gex = self.decoders[0](X[0])
+        decoded_pex = self.decoders[1](X[1]+X_residuals)
+        
+        return [decoded_gex, decoded_pex]
+
+
+    def forward(self, X, A, Y=None):
         output = Namespace()
         
-        # A = torch.eye(A.shape[0]).to(A.device)
+        # assert self.use_hist or Y is not None, 'Image input is required'
         
         gex_pos_z, gex_neg_z, gex_summary, pex_pos_z, pex_neg_z, pex_summary = self.encode(X, A)
+        
+        if self.use_hist:
+            # background = self.image_encoder.fc_cond(X[0])
+            # image_mu, image_logvar = self.image_encoder.encode(Y, background)
+            image_mu, image_logvar = self.image_encoder.encode(Y)
+            
+            image_z = self.image_encoder.reparameterize(image_mu, image_logvar)
+        
         encoded = [gex_pos_z, pex_pos_z]
-        zs, mus, logvars = self.refactor(encoded, A)
+        zs, mus, logvars = self.refactor(encoded)
+        if self.use_hist:
+            zs.append(image_z)
+            
         combined = self.combine(zs)
-        X_hat = self.decode(combined)
+        
+        # X_hat = self.decode(combined)
+        residuals = self.gene_projector(X[0][:, self.train_idx])
+        X_hat = self.decode_with_residuals(combined, residuals)
+        
+        
+        if self.use_hist:
+            image_recons = self.image_encoder.decode(combined[0])
+            
         output.adj_recon = self.adjacency(combined[0])      
 
-        output.gex_z, output.pex_z = zs
+        output.gex_z = zs[0] 
+        output.pex_z = zs[1]
         output.gex_pos_z = gex_pos_z
         output.pex_pos_z = pex_pos_z
         output.gex_neg_z = gex_neg_z
@@ -198,9 +293,20 @@ class InfoMaxVAE(nn.Module):
         output.pex_model_weight = self.encoders[1].weight
         output.gex_mu, output.pex_mu = mus
         output.gex_logvar, output.pex_logvar = logvars
-        output.gex_c, output.pex_c = combined
+        output.gex_c = combined[0]
+        output.pex_c = combined[1]
         output.gex_recons, output.pex_recons = X_hat
+
         output.gex_input, output.pex_input = X
+        
+        if self.use_hist:
+            output.img_mu = image_mu
+            output.img_logvar = image_logvar
+            output.img_recons = image_recons
+            output.img_z = image_z
+            output.img_input = Y
+            output.img_c = combined[2]
+            output.use_hist = self.use_hist 
 
         return output
     
@@ -209,34 +315,41 @@ class InfoMaxVAE(nn.Module):
         for m in self.modules():
             if m.__class__.__name__.startswith('Dropout'):
                 m.train()
+                
+                
+    @torch.no_grad()
+    def get_embeddings(self, X, adj):
+        self.eval()
+        edge_index = adj.nonzero().t().contiguous()
+        pos_z, _, _ = self.encoders[0](X, edge_index)
+        z = self.fc_mus[0](pos_z)
+        return z.cpu().numpy()
     
     @torch.no_grad()
-    def impute(self, X, adj, enable_dropout=False, return_z=False):
+    def impute(self, X, adj, indices, enable_dropout=False, return_z=False):
         self.eval()
-        
-        # adj = torch.eye(adj.shape[0]).to(adj.device)
-        
-        
-        
         if enable_dropout:
             self.enable_dropout()
         edge_index = adj.nonzero().t().contiguous()
         pos_z, _, _ = self.encoders[0](X, edge_index)
         z = self.fc_mus[0](pos_z)
-        decoded = self.decoders[1](z)
+        r = self.gene_projector(X[:, indices])
+        decoded = self.decoders[1](z+r)
+        recovered_gex = self.decoders[0](z)
+        
+        
         if return_z:
-            return decoded.cpu().numpy(), z.cpu().numpy()       
+            return decoded.cpu().numpy(), z.cpu().numpy(), recovered_gex.cpu().numpy()       
             
         return decoded.cpu().numpy()
-    
-    
-    # @torch.no_grad()
-    # def impute(self, X, A, return_z=False):
-    #     self.eval()
         
-    #     pos_z = self.encoders[0](X)
-    #     z = self.fc_mus[0](pos_z)
-    #     decoded = self.decoders[1](z)
-    #     if return_z:
-    #         return decoded.cpu().numpy(), z.cpu().numpy() 
-    #     return decoded.cpu().numpy()
+    @torch.no_grad()
+    def img2proteins(self, Y):                
+        self.eval()
+        self.image_encoder.eval()
+                
+        mu, logvar = self.image_encoder.encode(Y)
+        z = self.image_encoder.reparameterize(mu, logvar)
+        decoded = self.decoders[1](z)
+            
+        return decoded.cpu().numpy()
